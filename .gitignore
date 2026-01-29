@@ -1,0 +1,14 @@
+.build/
+build/
+build_debug/
+build_release/
+build_wasm/
+
+*.exe
+*.pdb
+*.raddbgi
+*.rdi
+*.ini
+
+imgui.ini
+
