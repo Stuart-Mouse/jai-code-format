@@ -90,6 +90,8 @@
     except it will collect all of the matched expressions into an array
     and we will need to implement the filter lambda stuff
     
+    for now I am doing the basic version of the filter which is just to give the match expression and match code as-is
+    in a perfect world we would be able to just let the user pass a polymorphic quick lambda and automatically generate the calling code to pass the extract expression nodes by name
 */
 
 DEBUG :: true;
@@ -116,19 +118,19 @@ Node_Format_Rule :: struct {
 Match_Expression :: struct {
     root:                   *Code_Node;
     extract_expressions:    [..] *Extract_Expression;
+    filter:                 (*Match_Expression, *Code_Node) -> bool;
 }
 
 Extract_Expression :: struct {
     using #as ident:    Code_Ident;
-    
     found_expression:   *Code_Node;
-    
     // found_expressions:  [] *Code_Node;
 }
 
 Code_Format_Rule :: struct {
     match_expression:  Code;
     insert_expression: Code;
+    filter: Code;
 }
 
 create_formatter :: (format_rules: [] Code_Format_Rule) -> Code_Formatter {
@@ -140,9 +142,23 @@ create_formatter :: (format_rules: [] Code_Format_Rule) -> Code_Formatter {
     return formatter;
 }
 
-format_code :: (code: Code, format_rules: ..Code_Format_Rule, code_to_copy_scope_from := #code,null, location := #caller_location) -> Code {
+format_code :: ($code: Code, $format_rules: ..Code_Format_Rule, $code_to_copy_scope_from := #caller_code, $location := #caller_location) -> Code {
+    return __format_code(code, format_rules, code_to_copy_scope_from, location);
+}
+
+__format_code :: ($code: Code, $format_rules: [$RULE_COUNT] Code_Format_Rule, $code_to_copy_scope_from := #caller_code, $location := #caller_location) -> Code {
     formatter := create_formatter(format_rules);
     defer deinit_formatter(*formatter);
+    
+    // TODO: generate code to insert the generated filter procedures and assign them to corresponding match expressions.
+    #insert -> string {
+        builder: String_Builder;
+        for 0..format_rules.count-1 {
+            print(*builder, "formatter.format_rules[%1].match_expression.filter = generate_filter_proc(#run format_rules[%1].filter);", it);
+        }
+        res := builder_to_string(*builder);
+        return res;
+    }
     
     nodes := compiler_get_nodes(code);
     nodes = format_code(*formatter, nodes);
@@ -167,9 +183,12 @@ format_code :: (formatter: *Code_Formatter, code: *Code_Node) -> *Code_Node {
 }
 
 try_getting_replacement_nodes :: (formatter: *Code_Formatter, code: *Code_Node, _: *void) -> Walk_Nodes_Return_Code, *Code_Node {
-    for rule: formatter.format_rules {
+    for *rule: formatter.format_rules {
         if match_code(formatter, *rule.match_expression, code, rule.match_expression.root) {
-            // TODO: handle "where clause" logic here 
+            filter := rule.match_expression.filter;
+            if filter && !filter(*rule.match_expression, code) {
+                return .CONTINUE, code;
+            }
             return .RETURN, create_replacement_nodes(formatter, code, rule);
         }
     }
@@ -427,6 +446,36 @@ match_code :: (formatter: *Code_Formatter, match_expression: *Match_Expression, 
         
       case .TYPE_INSTANTIATION;
         // Very recursive! Lots to consdier as well! But should ultimately be mostly straightforward... (edge cases will probably abound though)
+        _code, _match := get_code_and_match_as(Code_Type_Instantiation);
+        
+        // TODO: consider whether this is actually a good idea or not! Maybe we need flags for this!
+        // Take a shortcut and compare the type infos directly if we have type info for both _code and _match.
+        if _code.result && _match.result && (_code.result == _match.result)  return true;
+        
+        FLAGS_THAT_MUST_MATCH :: Code_Type_Instantiation.inst_flags.VARARGS | .TYPE_OF_PROCEDURE | .INTERFACE | .TYPE_DIRECTIVE;
+        if (_code.inst_flags & FLAGS_THAT_MUST_MATCH) != (_match.inst_flags & FLAGS_THAT_MUST_MATCH)  return false;
+        
+        if _code.pointer_to {
+            return match(_code.pointer_to, _match.pointer_to);
+        }
+        
+        if _code.array_element_type {
+            // TODO: special case for wildcard _match.array_dimension
+            ARRAY_FLAGS_THAT_MUST_MATCH :: Code_Type_Instantiation.inst_flags.RESIZABLE | .ARRAY_VIEW;
+            if (_code.inst_flags & ARRAY_FLAGS_THAT_MUST_MATCH) != (_code.inst_flags & ARRAY_FLAGS_THAT_MUST_MATCH)  return false;
+            if _code.array_dimension != _match.array_dimension  return false;
+            return match(_code.array_element_type, _match.array_element_type);
+        }
+        
+        if _code.type_directive_target {
+            return match(_code.type_directive_target, _match.type_directive_target);
+        }
+        
+        if _code.must_implement {
+            return match(_code.must_implement, _match.must_implement);
+        }
+        
+        return match(_code.type_valued_expression, _match.type_valued_expression);
         
       case .STRUCT;
         // Probably more useful to allow recursive search to match particular subsexpressions. Same can be said for blocks, I suppose.
@@ -798,7 +847,6 @@ walk_nodes :: (
     
     __return :: (result: *Code_Node) #expand {
         #if run_proc_on_return {
-            log("running proc on subexpression: %", sprintx(result));
             return_code, new := proc(formatter, result, user_data);
             if #complete return_code == {
               case .CONTINUE;   // no op
@@ -873,8 +921,6 @@ walk_nodes :: (
         
       case .BINARY_OPERATOR;
         code_binary_operator := __get_as(code, Code_Binary_Operator);
-        log("left: %", sprintx(code_binary_operator.left));
-        log("right: %", sprintx(code_binary_operator.right));
         code_binary_operator.left  = walk(code_binary_operator.left);
         code_binary_operator.right = walk(code_binary_operator.right);
         __return(code_binary_operator);
@@ -1231,4 +1277,46 @@ ensure_correctness :: (node: *Code_Node) {
     }
 }
 
+
+generate_filter_proc :: ($filter_code: Code) -> ((*Match_Expression, *Code_Node) -> bool) {
+    get_extracted_expression_by_name :: (match_expression: *Match_Expression, name: string) -> *Code_Node {
+        for match_expression.extract_expressions {
+            if it.name == name  return it.found_expression;
+        }
+        return null;
+    }
+    
+    return (match_expression: *Match_Expression, code: *Code_Node) -> bool { 
+        #insert -> string {
+            root := compiler_get_nodes(filter_code);
+            
+            if root.kind == .PROCEDURE_HEADER {
+                header := root.(*Code_Procedure_Header);
+                log("header flags: %", header.procedure_flags);
+                
+                // assert(header.procedure_flags & .QUICK != .QUICK);
+                builder: String_Builder;
+                append(*builder, "LAMBDA :: #insert filter_code;");
+                
+                for header.arguments {
+                    print(*builder, #string JAI
+                        arg_%1 := get_extracted_expression_by_name(match_expression, "%2"); 
+                        assert(arg_%1 != null, "Invalid identifier used in filter code: %2");
+                    JAI, it_index, it.name);
+                }
+                
+                append(*builder, "return LAMBDA(");
+                for header.arguments {
+                    print(*builder, "arg_%,", it_index);
+                }
+                append(*builder, ");\n");
+                
+                return builder_to_string(*builder);
+            } else {
+                // TOOD: we should probably check the type of the expression here...?
+                return "return #insert filter_code;";
+            }
+        }
+    };
+}
 
