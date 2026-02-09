@@ -1,5 +1,6 @@
 
 #import "Basic";
+#import "Math";
 #import "Compiler";
 
 #import "Utils";
@@ -8,27 +9,27 @@ Program_Print :: #import "Program_Print";
 
 main :: () {
     // Test simple find and replace
-    #insert #run 
+    #insert #run,stallable 
         format_code(#code log_eval(a + b),
             { (#code a), 3, true }, 
             { (#code b), 5, true },
         );
     
     {
-        sum_floats :: #insert #run format_code( code_of(sum), { int, float, true }, );
+        sum_floats :: #insert #run,stallable format_code( code_of(sum), { int, float, true }, );
         
         numbers := float.[ 1, 2.5, 3.25 ];
         log("sum_floats(%) -> %", numbers, sum_floats(numbers));
     }
     
     // Test find and replace with extracted/reinserted subexpressions
-    #insert #run 
+    #insert #run,stallable 
         format_code(#code log_eval(3 + 7),
             { (#code `a + `b), (#code b - a), true }, 
         );
     
     {
-        negative_sum :: #insert #run format_code( code_of(sum), { (#code `a += `b), (#code a -= b), true } );
+        negative_sum :: #insert #run,stallable format_code( code_of(sum), { (#code `a += `b), (#code a -= b), true } );
         
         numbers := int.[ 1, 2, 3, 4, 5 ];
         log("negative_sum(%) -> %", numbers, negative_sum(numbers));
@@ -37,7 +38,7 @@ main :: () {
     
     // Test more complex match expressions...
     // Matching against literals
-    #insert #run 
+    #insert #run,stallable 
         format_code(#code {
                 log_eval(1 + 1);
                 log_eval(1 + 2);
@@ -50,7 +51,7 @@ main :: () {
     
     
     // Matching against particular binary operators
-    #insert #run 
+    #insert #run,stallable 
         format_code(#code {
                 log_eval(6 + 1);
                 log_eval(6 - 1);
@@ -59,7 +60,7 @@ main :: () {
         );
     
     // Matching against particular unary operators
-    #insert #run 
+    #insert #run,stallable 
         format_code(#code {
                 value := 5;
                 log_eval(+value);
@@ -73,7 +74,7 @@ main :: () {
     // Match a compound declaration
     
     // Match a cast to a particular type (check actual type info if match expression and input code are typed)
-    #insert #run 
+    #insert #run,stallable 
         format_code(#code {
                 value    := 5;
                 as_float := cast(float) value;
@@ -97,9 +98,41 @@ main :: () {
             log_eval(artichoke);
         }
         
-        bar :: #insert #run
+        bar :: #insert #run,stallable
             format_code(code_of(foo),
                 { (#code `a), (#code `a * 2), a => a.kind == .IDENT && a.(*Code_Ident).name[0] == "a" && a.type.type == .INTEGER }, 
+            );
+        
+        bar();
+    }
+    
+    {
+        floor_float_to_int :: (x: float, $T: Type) -> T #modify {
+            return T.(*Type_Info).type == .INTEGER;
+        } {
+            return cast(T) floor(x); 
+        }
+        
+        foo :: () {
+            {
+                _int: int;
+                _float := cast(float) _int;
+            }
+            
+            {
+                _float: float;
+                _int := cast(int) _float;
+            }
+        }
+        
+        bar :: #insert #run,stallable
+            format_code(code_of(foo),
+                { 
+                    (#code cast(`T) `a), 
+                    (#code floor_float_to_int(a, T)), 
+                    (a, T) => a.type.type == .FLOAT && echo(T.kind)
+                }, 
+                code_to_copy_scope_from = echo
             );
         
         bar();
@@ -124,7 +157,7 @@ main :: () {
         
         TODO: build an operator precedence lookup table and add logic to Program_Print to respect operator precedence by automatically inserting parentheses where required.
     */ 
-    #insert #run 
+    #insert #run,stallable 
         format_code(#code log_eval(1 + 2 + 3),
             { (#code `a + `b), (#code b - a), true }, 
         );
@@ -132,8 +165,13 @@ main :: () {
     
 }
 
+echo :: (value: $T) -> T {
+    log("%", value);
+    return value;
+}
+
 log_eval :: ($code: Code) #expand {
-    expression := #run sprintx(compiler_get_nodes(code));
+    expression := #run,stallable sprintx(compiler_get_nodes(code));
     value := #insert code;
     log("% -> %", expression, value);
 }
@@ -158,7 +196,7 @@ log_eval :: ($code: Code) #expand {
     
 */
 
-// #run {
+// #run,stallable {
 //     expression := compiler_get_nodes( 3 - (2 - 1) );
     
 //     builder: String_Builder;

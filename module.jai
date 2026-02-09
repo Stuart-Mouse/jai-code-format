@@ -81,8 +81,11 @@
     replace (..left: type = ..right)
     
     
+    TODO: create a code builder
+        append statements within block, open block, close block etc.
     
-    
+    TODO: create procedure to format the same code with an array of insert expresisons
+        this can probably just be part of the code builder
     
     TODO: before adding more stuff for formatting/replacing we should make a functional and useful code_search
     
@@ -154,7 +157,7 @@ __format_code :: ($code: Code, $format_rules: [$RULE_COUNT] Code_Format_Rule, $c
     #insert -> string {
         builder: String_Builder;
         for 0..format_rules.count-1 {
-            print(*builder, "formatter.format_rules[%1].match_expression.filter = generate_filter_proc(#run format_rules[%1].filter);", it);
+            print(*builder, "formatter.format_rules[%1].match_expression.filter = generate_filter_proc(#run format_rules[%1].filter, code_to_copy_scope_from);", it);
         }
         res := builder_to_string(*builder);
         return res;
@@ -235,7 +238,10 @@ match_code :: (formatter: *Code_Formatter, match_expression: *Match_Expression, 
     
     if #complete code.kind == {
       case .IDENT;
+        log("checking for match on identifier: %", code.(*Code_Ident).name);
+        log("code_to_match: %", code_to_match.*);
         _code, _match := get_code_and_match_as(Code_Ident);
+        log("comapring identifier: % == % -> %", _code.name, _match.name, _code.name == _match.name);
         return _code.name == _match.name;
         
       case .BINARY_OPERATOR;
@@ -590,6 +596,8 @@ match_code :: (formatter: *Code_Formatter, match_expression: *Match_Expression, 
 
 #scope_module
 
+#load "utils.jai";
+
 #import "Compiler";
 #import "Basic";
 #import "String";
@@ -788,15 +796,6 @@ sprintx :: (root: *Code_Node) -> string {
     return builder_to_string(*debug_builder);
 }
 
-
-// TODO: Compiler_Utils module? I have many other homemade make_x procs that I keep copy-pasting around...
-make_identifier :: (name: string) -> *Code_Ident {
-    ident := New(Code_Ident);
-    ident.name = name;
-    return ident;
-}
-
-
 Walk_Nodes_Return_Code :: enum {
     ERROR       :: -1;
     CONTINUE    ::  0;
@@ -826,6 +825,8 @@ walk_nodes :: (
         return null;
     }
     
+    
+    
     // NOTE: `code` is replaced with return value of proc unconditionally!
     #if !run_proc_on_return {
         return_code:, code = proc(formatter, code, user_data);
@@ -847,6 +848,7 @@ walk_nodes :: (
     
     __return :: (result: *Code_Node) #expand {
         #if run_proc_on_return {
+            log("run_proc_on_return: %", sprintx(code));
             return_code, new := proc(formatter, result, user_data);
             if #complete return_code == {
               case .CONTINUE;   // no op
@@ -1278,45 +1280,68 @@ ensure_correctness :: (node: *Code_Node) {
 }
 
 
-generate_filter_proc :: ($filter_code: Code) -> ((*Match_Expression, *Code_Node) -> bool) {
+// TODO: try 2 potential solutions:
+// 1 - just put the logic for get_extracted_expression_by_name directly into the inserted code so we don't need access to this procedure's scope at all.
+// 2 - put get_extracted_expression_by_name in module scope and use an import of Code_Format to get at the procedure.
+generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match_Expression, *Code_Node) -> bool) {
     get_extracted_expression_by_name :: (match_expression: *Match_Expression, name: string) -> *Code_Node {
         for match_expression.extract_expressions {
             if it.name == name  return it.found_expression;
         }
+        assert(false, "Invalid identifier used in filter code: %2");
         return null;
     }
     
     return (match_expression: *Match_Expression, code: *Code_Node) -> bool { 
-        #insert -> string {
+        #insert -> Code {
             root := compiler_get_nodes(filter_code);
+            if root == null  return #code,null;
             
             if root.kind == .PROCEDURE_HEADER {
                 header := root.(*Code_Procedure_Header);
-                log("header flags: %", header.procedure_flags);
+                assert(header.procedure_flags & .QUICK == .QUICK);
                 
-                // assert(header.procedure_flags & .QUICK != .QUICK);
-                builder: String_Builder;
-                append(*builder, "LAMBDA :: #insert filter_code;");
+                block := New(Code_Block);
+                block.block_type = .IMPERATIVE;
+                block.statements = NewArray(header.arguments.count, *Code_Node);
                 
                 for header.arguments {
-                    print(*builder, #string JAI
-                        arg_%1 := get_extracted_expression_by_name(match_expression, "%2"); 
-                        assert(arg_%1 != null, "Invalid identifier used in filter code: %2");
-                    JAI, it_index, it.name);
+                    declaration := New(Code_Declaration);
+                    declaration.name = it.name;
+                    declaration.expression = make_procedure_call("get_extracted_expression_by_name", 
+                        .{ expression = make_identifier("match_expression") },
+                        .{ expression = make_string_literal(it.name) },
+                    );
+                    block.statements[it_index] = declaration;
                 }
                 
-                append(*builder, "return LAMBDA(");
-                for header.arguments {
-                    print(*builder, "arg_%,", it_index);
-                }
-                append(*builder, ");\n");
-                
-                return builder_to_string(*builder);
-            } else {
-                // TOOD: we should probably check the type of the expression here...?
-                return "return #insert filter_code;";
+                return compiler_get_code(block);
             }
+            return #code,null;
         }
+        #insert -> Code {
+            root := compiler_get_nodes(filter_code);
+            if root == null  return #code,null;
+            
+            if root.kind == .PROCEDURE_HEADER {
+                header := root.(*Code_Procedure_Header);
+                assert(header.procedure_flags & .QUICK == .QUICK);
+                
+                // Because of scoping issues when inserting procedures, we actually need to insert only the body code here.
+                // AAARGGH I can't get the scope I need for the result block...
+                result_block := header.body_or_null.block.*;
+                
+                return_statement := New(Code_Return);
+                return_statement.arguments_unsorted = NewArray(1, Code_Argument);
+                return_statement.arguments_unsorted[0] = .{ expression = make_if(make_integer_literal(1), *result_block, null, .IS_IFX) };
+                
+                result_block.owning_statement = return_statement;
+                
+                return compiler_get_code(return_statement);
+            }
+            return #code,null;
+        }
+        return true;
     };
 }
 
