@@ -7,7 +7,7 @@ make_identifier :: (name: string) -> *Code_Ident {
 
 make_binary_operator :: (operator_type: Operator_Type, lhs: *Code_Node, rhs: *Code_Node) -> *Code_Binary_Operator {
     code_operator := New(Code_Binary_Operator);
-    code_operator.operator_type = #char ".";
+    code_operator.operator_type = operator_type;
     code_operator.left  = lhs;
     code_operator.right = rhs;
     return code_operator;
