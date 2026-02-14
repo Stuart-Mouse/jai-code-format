@@ -34,7 +34,30 @@ make_procedure_call :: (procedure_expression: *Code_Node, arguments: ..Code_Argu
     return call;
 }
 
-// make_declaration :: (name: string, type_inst: *Code_Type_Instantiation = null, expression: *Code_Node = null)
+make_declaration :: (name: string, type_inst: *Code_Type_Instantiation = null, expression: *Code_Node = null, flags: type_of(Code_Declaration.flags) = xx 0) -> *Code_Declaration {
+    declaration := New(Code_Declaration);
+    declaration.name        = name;
+    declaration.type_inst   = type_inst;
+    declaration.expression  = expression;
+    declaration.flags       = flags;
+    return declaration;
+}
+
+make_declaration :: (name: string, type_name: string, expression: *Code_Node = null, flags: type_of(Code_Declaration.flags) = xx 0) -> *Code_Declaration {
+    return make_declaration(name, make_type_instantiation(type_name), expression, flags);
+}
+
+make_type_instantiation :: (type_valued_expression: *Code_Node) -> *Code_Type_Instantiation {
+    type_inst := New(Code_Type_Instantiation);
+    type_inst.type_valued_expression = type_valued_expression;
+    return type_inst;
+}
+
+make_type_instantiation :: (type_name: string) -> *Code_Type_Instantiation {
+    type_inst := New(Code_Type_Instantiation);
+    type_inst.type_valued_expression = make_identifier(type_name);
+    return type_inst;
+}
 
 make_if :: (condition: *Code_Node, then_block: *Code_Block, else_block: *Code_Block, flags: type_of(Code_If.if_flags)) -> *Code_If {
     code := New(Code_If);

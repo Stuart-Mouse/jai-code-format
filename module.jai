@@ -597,6 +597,7 @@ match_code :: (formatter: *Code_Formatter, match_expression: *Match_Expression, 
 #scope_module
 
 #load "utils.jai";
+#load "builder.jai";
 
 #import "Compiler";
 #import "Basic";
@@ -682,71 +683,76 @@ create_format_rules_from_extract_expressions :: (formatter: *Code_Formatter, ext
     return rules;
 }
 
-get_node_type_info :: (node: *Code_Node) -> *Type_Info {
-    type: *Type_Info;
-    if #complete node.kind == {
-      case .LITERAL;                     type = type_info(Code_Literal);
-      case .BLOCK;                       type = type_info(Code_Block);
-      case .IDENT;                       type = type_info(Code_Ident);
-      case .BINARY_OPERATOR;             type = type_info(Code_Binary_Operator);
-      case .UNARY_OPERATOR;              type = type_info(Code_Unary_Operator);
-      case .PROCEDURE_CALL;              type = type_info(Code_Procedure_Call);
-      case .WHILE;                       type = type_info(Code_While);
-      case .FOR;                         type = type_info(Code_For);
-      case .LOOP_CONTROL;                type = type_info(Code_Loop_Control);
-      case .IF;                          type = type_info(Code_If);
-      case .CASE;                        type = type_info(Code_Case);
-      case .COMMA_SEPARATED_ARGUMENTS;   type = type_info(Code_Comma_Separated_Arguments);
-      case .RESOLVED_OVERLOAD;           type = type_info(Code_Resolved_Overload);
-      case .CAST;                        type = type_info(Code_Cast);
-      case .TYPE_INSTANTIATION;          type = type_info(Code_Type_Instantiation);
-      case .RETURN;                      type = type_info(Code_Return);
-      case .DIRECTIVE_THIS;              type = type_info(Code_Node); //  There is no Code_Directive_This
-      case .DIRECTIVE_ADD_CONTEXT;       type = type_info(Code_Directive_Add_Context);
-      case .DIRECTIVE_CONTEXT_TYPE;      type = type_info(Code_Directive_Context_Type);
-      case .DIRECTIVE_OVERLAY;           type = type_info(Code_Directive_Overlay);
-      case .DIRECTIVE_PROCEDURE_NAME;    type = type_info(Code_Directive_Procedure_Name);
-      case .DIRECTIVE_COMPILE_TIME;      type = type_info(Code_Node); //  There is no Code_Directive_Compile_Time
-      case .DIRECTIVE_CODE;              type = type_info(Code_Directive_Code);
-      case .DIRECTIVE_BYTES;             type = type_info(Code_Directive_Bytes);
-      case .STRUCT;                      type = type_info(Code_Struct);
-      case .ENUM;                        type = type_info(Code_Enum);
-      case .CONTEXT;                     type = type_info(Code_Context);
-      case .PUSH_CONTEXT;                type = type_info(Code_Push_Context);
-      case .TYPE_QUERY;                  type = type_info(Code_Type_Query);
-      case .EXPRESSION_QUERY;            type = type_info(Code_Expression_Query);
-      case .DIRECTIVE_LOCATION;          type = type_info(Code_Directive_Location);
-      case .DIRECTIVE_THROUGH;           type = type_info(Code_Directive_Through);
-      case .DIRECTIVE_RUN;               type = type_info(Code_Directive_Run);
-      case .DIRECTIVE_LIBRARY;           type = type_info(Code_Directive_Library);
-      case .DIRECTIVE_BAKE;              type = type_info(Code_Directive_Bake);
-      case .PROCEDURE_HEADER;            type = type_info(Code_Procedure_Header);
-      case .TYPE_DEFINITION;             type = type_info(Code_Type_Definition);
-      case .DIRECTIVE_IMPORT;            type = type_info(Code_Directive_Import);
-      case .DEFER;                       type = type_info(Code_Defer);
-      case .USING;                       type = type_info(Code_Using);
-      case .COMPOUND_DECLARATION;        type = type_info(Code_Compound_Declaration);
-      case .ASM;                         type = type_info(Code_Asm);
-      case .DIRECTIVE_INSERT;            type = type_info(Code_Directive_Insert);
-      case .DIRECTIVE_PLACE;             type = type_info(Code_Directive_Place);
-      case .DIRECTIVE_MODULE_PARAMETERS; type = type_info(Code_Directive_Module_Parameters);
-      case .NOTE;                        type = type_info(Code_Note);
-      case .DIRECTIVE_WILDCARD;          type = type_info(Code_Directive_Wildcard);
-      case .DIRECTIVE_EXISTS;            type = type_info(Code_Directive_Exists);
-      case .PROCEDURE_BODY;              type = type_info(Code_Procedure_Body);
-      case .DECLARATION;                 type = type_info(Code_Declaration);
-      case .DIRECTIVE_MODIFY;            type = type_info(Code_Directive_Modify);
-      case .EXTRACT;                     type = type_info(Code_Extract);
-      case .DIRECTIVE_SCOPE;             type = type_info(Code_Directive_Scope);
-      case .MAKE_VARARGS;                type = type_info(Code_Make_Varargs);
-      case .DIRECTIVE_POKE_NAME;         type = type_info(Code_Directive_Poke_Name);
-      case .DIRECTIVE_LOAD;              type = type_info(Code_Directive_Load);
-      case .PLACEHOLDER;                 type = type_info(Code_Placeholder);
+get_type_for_node_kind :: (kind: Code_Node.Kind) -> Type {
+    type: Type;
+    if #complete kind == {
+      case .LITERAL;                     type = Code_Literal;
+      case .BLOCK;                       type = Code_Block;
+      case .IDENT;                       type = Code_Ident;
+      case .BINARY_OPERATOR;             type = Code_Binary_Operator;
+      case .UNARY_OPERATOR;              type = Code_Unary_Operator;
+      case .PROCEDURE_CALL;              type = Code_Procedure_Call;
+      case .WHILE;                       type = Code_While;
+      case .FOR;                         type = Code_For;
+      case .LOOP_CONTROL;                type = Code_Loop_Control;
+      case .IF;                          type = Code_If;
+      case .CASE;                        type = Code_Case;
+      case .COMMA_SEPARATED_ARGUMENTS;   type = Code_Comma_Separated_Arguments;
+      case .RESOLVED_OVERLOAD;           type = Code_Resolved_Overload;
+      case .CAST;                        type = Code_Cast;
+      case .TYPE_INSTANTIATION;          type = Code_Type_Instantiation;
+      case .RETURN;                      type = Code_Return;
+      case .DIRECTIVE_THIS;              type = Code_Node; //  There is no Code_Directive_This
+      case .DIRECTIVE_ADD_CONTEXT;       type = Code_Directive_Add_Context;
+      case .DIRECTIVE_CONTEXT_TYPE;      type = Code_Directive_Context_Type;
+      case .DIRECTIVE_OVERLAY;           type = Code_Directive_Overlay;
+      case .DIRECTIVE_PROCEDURE_NAME;    type = Code_Directive_Procedure_Name;
+      case .DIRECTIVE_COMPILE_TIME;      type = Code_Node; //  There is no Code_Directive_Compile_Time
+      case .DIRECTIVE_CODE;              type = Code_Directive_Code;
+      case .DIRECTIVE_BYTES;             type = Code_Directive_Bytes;
+      case .STRUCT;                      type = Code_Struct;
+      case .ENUM;                        type = Code_Enum;
+      case .CONTEXT;                     type = Code_Context;
+      case .PUSH_CONTEXT;                type = Code_Push_Context;
+      case .TYPE_QUERY;                  type = Code_Type_Query;
+      case .EXPRESSION_QUERY;            type = Code_Expression_Query;
+      case .DIRECTIVE_LOCATION;          type = Code_Directive_Location;
+      case .DIRECTIVE_THROUGH;           type = Code_Directive_Through;
+      case .DIRECTIVE_RUN;               type = Code_Directive_Run;
+      case .DIRECTIVE_LIBRARY;           type = Code_Directive_Library;
+      case .DIRECTIVE_BAKE;              type = Code_Directive_Bake;
+      case .PROCEDURE_HEADER;            type = Code_Procedure_Header;
+      case .TYPE_DEFINITION;             type = Code_Type_Definition;
+      case .DIRECTIVE_IMPORT;            type = Code_Directive_Import;
+      case .DEFER;                       type = Code_Defer;
+      case .USING;                       type = Code_Using;
+      case .COMPOUND_DECLARATION;        type = Code_Compound_Declaration;
+      case .ASM;                         type = Code_Asm;
+      case .DIRECTIVE_INSERT;            type = Code_Directive_Insert;
+      case .DIRECTIVE_PLACE;             type = Code_Directive_Place;
+      case .DIRECTIVE_MODULE_PARAMETERS; type = Code_Directive_Module_Parameters;
+      case .NOTE;                        type = Code_Note;
+      case .DIRECTIVE_WILDCARD;          type = Code_Directive_Wildcard;
+      case .DIRECTIVE_EXISTS;            type = Code_Directive_Exists;
+      case .PROCEDURE_BODY;              type = Code_Procedure_Body;
+      case .DECLARATION;                 type = Code_Declaration;
+      case .DIRECTIVE_MODIFY;            type = Code_Directive_Modify;
+      case .EXTRACT;                     type = Code_Extract;
+      case .DIRECTIVE_SCOPE;             type = Code_Directive_Scope;
+      case .MAKE_VARARGS;                type = Code_Make_Varargs;
+      case .DIRECTIVE_POKE_NAME;         type = Code_Directive_Poke_Name;
+      case .DIRECTIVE_LOAD;              type = Code_Directive_Load;
+      case .PLACEHOLDER;                 type = Code_Placeholder;
       
       case .UNINITIALIZED;               #through;
       case;
-        assert(false, "Invalid code node kind: %", node.kind);
+        assert(false, "Invalid code node kind: %", kind);
     }
+    return type;
+}
+
+get_node_type_info :: (node: *Code_Node) -> *Type_Info {
+    type := get_type_for_node_kind(node.kind).(*Type_Info);
     return type;
 }
 
