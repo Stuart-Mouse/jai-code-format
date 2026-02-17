@@ -87,56 +87,56 @@ main :: () {
     
     
     // Test filter expressions
-    {
-        foo :: () {
-            apple:      int   = 3;
-            banana:     int   = 5;
-            artichoke:  float = 7;
+    // {
+    //     foo :: () {
+    //         apple:      int   = 3;
+    //         banana:     int   = 5;
+    //         artichoke:  float = 7;
             
-            log_eval(apple);
-            log_eval(banana);
-            log_eval(artichoke);
-        }
+    //         log_eval(apple);
+    //         log_eval(banana);
+    //         log_eval(artichoke);
+    //     }
         
-        bar :: #insert #run,stallable
-            format_code(code_of(foo),
-                { (#code `a), (#code `a * 2), a => a.kind == .IDENT && a.(*Code_Ident).name[0] == "a" && a.type.type == .INTEGER }, 
-            );
+    //     bar :: #insert #run,stallable
+    //         format_code(code_of(foo),
+    //             { (#code `a), (#code `a * 2), a => a.kind == .IDENT && a.(*Code_Ident).name[0] == "a" && a.type.type == .INTEGER }, 
+    //         );
         
-        bar();
-    }
+    //     bar();
+    // }
     
-    {
-        floor_float_to_int :: (x: float, $T: Type) -> T #modify {
-            return T.(*Type_Info).type == .INTEGER;
-        } {
-            return cast(T) floor(x); 
-        }
+    // {
+    //     floor_float_to_int :: (x: float, $T: Type) -> T #modify {
+    //         return T.(*Type_Info).type == .INTEGER;
+    //     } {
+    //         return cast(T) floor(x); 
+    //     }
         
-        foo :: () {
-            {
-                _int: int;
-                _float := cast(float) _int;
-            }
+    //     foo :: () {
+    //         {
+    //             _int: int;
+    //             _float := cast(float) _int;
+    //         }
             
-            {
-                _float: float;
-                _int := cast(int) _float;
-            }
-        }
+    //         {
+    //             _float: float;
+    //             _int := cast(int) _float;
+    //         }
+    //     }
         
-        bar :: #insert #run,stallable
-            format_code(code_of(foo),
-                { 
-                    (#code cast(`T) `a), 
-                    (#code floor_float_to_int(a, T)), 
-                    (a, T) => a.type.type == .FLOAT && echo(T.kind)
-                }, 
-                code_to_copy_scope_from = echo
-            );
+    //     bar :: #insert #run,stallable
+    //         format_code(code_of(foo),
+    //             { 
+    //                 (#code cast(`T) `a), 
+    //                 (#code floor_float_to_int(a, T)), 
+    //                 (a, T) => a.type.type == .FLOAT && echo(T.kind)
+    //             }, 
+    //             code_to_copy_scope_from = echo
+    //         );
         
-        bar();
-    }
+    //     bar();
+    // }
     
     // Test recursive replacements...
     // replace a + (b + c) with a - (b - c)

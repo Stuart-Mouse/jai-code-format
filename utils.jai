@@ -153,6 +153,32 @@ make_type_of :: (expression: *Code_Node) {
     return code_expression_query;
 }
 
+// make_integer_literal :: (v: u64) -> *Code_Literal {
+//     literal := New(Code_Literal);
+
+//     literal.kind          = .LITERAL;
+//     literal.value_type    = .NUMBER;
+//     literal.value_flags   = .IS_A_NUMBER;
+//     literal._u64          = v;
+
+//     return literal;
+// }
+
+make_float32_literal :: (v: float32) -> *Code_Literal {
+    literal := New(Code_Literal);
+    literal.value_type    = .NUMBER;
+    literal.value_flags   = .IS_A_NUMBER | .FLOAT;
+    literal._float64      = v;
+    return literal;
+}
+
+make_float64_literal :: (v: float64) -> *Code_Literal {
+    literal := New(Code_Literal);
+    literal.value_type    = .NUMBER;
+    literal.value_flags   = .IS_A_NUMBER | .FLOAT | .DEFAULTS_TO_FLOAT64;
+    literal._float64      = v;
+    return literal;
+}
 
 
 
@@ -171,3 +197,145 @@ print_code :: (code: *Code_Node) {
     append(*builder, "\n");
     write_string(builder_to_string(*builder));
 }
+
+// NOTE: code nodes will be allocated with context.allocator
+make_literal_from_any :: (any: Any) -> *Code_Node {
+    base_type := Reflect.get_variant_base_type(any.type);
+    
+    if base_type.type == {
+      case .STRING;
+        return make_string_literal(any.value_pointer.(*string).*);
+        
+      case .BOOL;
+        bool_literal := New(Code_Literal);
+        bool_literal.value_type = .BOOLEAN;
+        bool_literal._u64 = xx any.value_pointer.(*bool).*;
+        return bool_literal;
+        
+      case .INTEGER;
+        integer_info := base_type.(*Type_Info_Integer);
+        // TODO: I am not sure of the proper way to make a u64 literal as code nodes.
+        //       Certainly there must be some way, but at the moment it is not apparent...
+        value_as_s64 := get_integer_value_as_s64(integer_info, any.value_pointer);
+        return make_integer_literal(value_as_s64);
+        
+      case .FLOAT;
+        float_info := base_type.(*Type_Info_Float);
+        if float_info.runtime_size == {
+          case 4;
+            return make_float32_literal(any.value_pointer.(*float32).*);
+          case 8;
+            return make_float64_literal(any.value_pointer.(*float64).*);
+        }
+        assert(false, "unreachable");
+        
+      case .ENUM;
+        enum_info := base_type.(*Type_Info_Enum); 
+        value_as_s64 := get_integer_value_as_s64(enum_info.internal_type, any.value_pointer);
+        name := Reflect.enum_value_to_name(enum_info, value_as_s64);
+        return make_unary_operator(#char ".", make_ident(name));
+        
+      case .STRUCT;
+        struct_info := base_type.(*Type_Info_Struct);
+        
+        struct_literal := New(Code_Literal);
+        struct_literal.value_type = .STRUCT;
+        struct_literal.struct_literal_info = New(Code_Struct_Literal_Info);
+        using struct_literal.struct_literal_info;
+        
+        member_count := count_assignable_members(struct_info);
+        arguments = NewArray(member_count, *Code_Node);
+        
+        for struct_info.members {
+            if it.flags & (.CONSTANT | .OVERLAY)  continue;
+            member_any := Any.{ it.type, any.value_pointer + it.offset_in_bytes };
+            arguments[it_index] = make_literal_from_any(member_any);
+        }
+        
+        // type expression will probably not be required in most cases, but we will at least want to be able to pass the type inst as a hint so that we can have a top-level type when it matters
+        // TODO: make_type_inst_from_type_info could be useful...
+        // struct_literal.struct_literal_info.type_expression = TODO;
+        
+        return struct_literal;
+        
+      case .ARRAY;
+        array_info := base_type.(*Type_Info_Array);
+        array_count, array_data := get_array_count_and_data(array_info, any.value_pointer);
+        
+        array_literal := New(Code_Literal);
+        array_literal.value_type = .ARRAY;
+        array_literal.array_literal_info = New(Code_Array_Literal_Info);
+        using array_literal.array_literal_info;
+        
+        array_members = NewArray(array_count, *Code_Node);
+        
+        for 0..array_count-1 {
+            element_any := Any.{ array_info.element_type, array_data + it * array_info.element_type.runtime_size };
+            array_members[it] = make_literal_from_any(element_any);
+        }
+        
+        // TODO: support explicit element type
+        array_literal_flags = .WAS_UNTYPED;
+        
+        return array_literal;
+        
+      case .POINTER;
+        // TODO: support optionally copying pointed-at data into constant storage and generating intitializers for that data as well.
+        // NOTE: for now, all pointers are just initialized as null pointers
+        pointer_literal := New(Code_Literal);
+        pointer_literal.value_type = .POINTER;
+        pointer_literal.pointer_literal_info = New(Code_Pointer_Literal_Info);
+        return pointer_literal;
+        
+      case .CODE;
+        return compiler_get_nodes(#code #code,null);
+    }
+    
+    assert(false, "Unimplemented case in make_literal_from_any.");
+    return null;
+}
+
+
+
+#scope_module 
+
+get_integer_value_as_s64 :: (integer_info: *Type_Info_Integer, value_pointer: *void) -> s64 {
+    value_as_s64: s64;
+    if integer_info.signed {
+        if integer_info.runtime_size == {
+          case 1; value_as_s64 = xx value_pointer.(*s\8);
+          case 2; value_as_s64 = xx value_pointer.(*s16);
+          case 4; value_as_s64 = xx value_pointer.(*s32);
+          case 8; value_as_s64 = xx value_pointer.(*s64);
+        }
+    } else {
+        if integer_info.runtime_size == {
+          case 1; value_as_s64 = xx value_pointer.(*u\8);
+          case 2; value_as_s64 = xx value_pointer.(*u16);
+          case 4; value_as_s64 = xx value_pointer.(*u32);
+          case 8; value_as_s64 = xx,no_check value_pointer.(*u64);
+        }
+    }
+    return value_as_s64;
+}
+
+get_array_count_and_data :: inline (array_info: *Type_Info_Array, value_pointer: *void) -> (int, *void) {
+    if array_info.array_type == .FIXED {
+        return array_info.array_count, value_pointer;
+    } else {
+        raw_array := value_pointer.(*Resizable_Array);
+        return raw_array.count, raw_array.data;
+    }
+}
+
+count_assignable_members :: (struct_info: *Type_Info_Struct) -> int {
+    count := 0;
+    for struct_info.members {
+        if it.flags & (.CONSTANT | .OVERLAY)  continue;
+        count += 1;
+    }
+    return count;
+}
+
+Reflect :: #import "Reflect";
+

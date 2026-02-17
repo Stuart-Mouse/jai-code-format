@@ -47,10 +47,9 @@ pop_current_block :: (builder: *Code_Builder) -> *Code_Block, [] *Code_Node {
     //       or we could find somewhere to put this data on the side. (maybe on the node stack before block itself?)
     
     builder.index_of_current_block -= 1;
-    while builder.node_stack[builder.index_of_current_block].kind != .BLOCK {
+    while builder.index_of_current_block >= 0
+       && builder.node_stack[builder.index_of_current_block].kind != .BLOCK {
         builder.index_of_current_block -= 1;
-        // assert(builder.index_of_current_block > 0, "Error: could not find parent block on node stack!");
-        if builder.index_of_current_block == -1  break;
     }
     
     return code_block, contents;
@@ -152,7 +151,7 @@ append_struct_member :: (builder: *Code_Builder, name: string, type_inst: *Code_
     code_block := get_current_block(builder);
     assert(code_block.belongs_to_struct != null, "Attempted to append a struct member into a block which does not belong to a struct.", loc = loc);
     
-    entry := make_declaration(name, type_inst, expression, );
+    entry := make_declaration(name, type_inst, expression, flags);
     push_node_stack(builder, entry);
 }
 

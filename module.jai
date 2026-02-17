@@ -97,20 +97,16 @@
     in a perfect world we would be able to just let the user pass a polymorphic quick lambda and automatically generate the calling code to pass the extract expression nodes by name
 */
 
-DEBUG :: true;
+DEBUG :: false;
 
 debug_log :: (format: string, args: ..Any) {
     #if DEBUG  log(format, ..args);
 }
 
 Code_Formatter :: struct {
-    memory_pool:    Flat_Pool;
+    // IMPORTANT NOTE: we assume that the allocator is some kind of pool and that all nodes will be freed at once.
+    allocator:      Allocator;
     format_rules:   [] Node_Format_Rule;
-}
-
-deinit_formatter :: (formatter: *Code_Formatter) {
-    fini(*formatter.memory_pool);
-    array_free(formatter.format_rules);
 }
 
 Node_Format_Rule :: struct {
@@ -136,31 +132,53 @@ Code_Format_Rule :: struct {
     filter: Code;
 }
 
-create_formatter :: (format_rules: [] Code_Format_Rule) -> Code_Formatter {
-    formatter: Code_Formatter;
+create_node_format_rule :: (formatter: *Code_Formatter, $code_format_rule: Code_Format_Rule, $code_to_copy_scope_from: Code) -> Node_Format_Rule {
+    node_rule: Node_Format_Rule;
     
-    formatter.format_rules = NewArray(format_rules.count, Node_Format_Rule);
-    for format_rules  formatter.format_rules[it_index] = create_format_rule(*formatter, it);
+    match_expression_walk_proc :: (formatter: *Code_Formatter, code: *Code_Node, match_expression: *Match_Expression) -> Walk_Nodes_Return_Code, *Code_Node {
+        code_ident := is_backticked_identifier(code);
+        if code_ident {
+            ext_exp := New(Extract_Expression,, get_allocator(formatter));
+            ext_exp.ident = code_ident;
+            array_add(*match_expression.extract_expressions, ext_exp);
+            return .RETURN, ext_exp;
+        }
+        return .CONTINUE, code;
+    };
     
-    return formatter;
+    node_rule.match_expression.root = compiler_get_nodes(code_format_rule.match_expression);
+    node_rule.match_expression.root = walk_nodes(
+        match_expression_walk_proc, 
+        formatter, 
+        node_rule.match_expression.root, 
+        *node_rule.match_expression,
+        modify_in_place = true,
+    );
+    
+    // TODO: We should experiment later with preprocessing the insert expression to optimize subexpression re-insertions.
+    node_rule.insert_expression = compiler_get_nodes(code_format_rule.insert_expression);
+    
+    // NOTE: The call to generate_filter_proc is the reason why code_format_rule must be constant.
+    node_rule.match_expression.filter = generate_filter_proc(#run code_format_rule.filter, code_to_copy_scope_from);
+    
+    return node_rule;
 }
 
 format_code :: ($code: Code, $format_rules: ..Code_Format_Rule, $code_to_copy_scope_from := #caller_code, $location := #caller_location) -> Code {
-    return __format_code(code, format_rules, code_to_copy_scope_from, location);
-}
-
-__format_code :: ($code: Code, $format_rules: [$RULE_COUNT] Code_Format_Rule, $code_to_copy_scope_from := #caller_code, $location := #caller_location) -> Code {
-    formatter := create_formatter(format_rules);
-    defer deinit_formatter(*formatter);
+    memory_pool: Flat_Pool;
+    defer fini(*memory_pool);
+    allocator := Allocator.{ flat_pool_allocator_proc, *memory_pool };
     
-    // TODO: generate code to insert the generated filter procedures and assign them to corresponding match expressions.
+    formatter: Code_Formatter;
+    formatter.allocator = allocator;
+    
+    formatter.format_rules = NewArray(format_rules.count, Node_Format_Rule,, get_allocator(*formatter));
     #insert -> string {
         builder: String_Builder;
         for 0..format_rules.count-1 {
-            print(*builder, "formatter.format_rules[%1].match_expression.filter = generate_filter_proc(#run format_rules[%1].filter, code_to_copy_scope_from);", it);
+            print(*builder, "formatter.format_rules[%1] = create_node_format_rule(*formatter, format_rules[%1], code_to_copy_scope_from);", it);
         }
-        res := builder_to_string(*builder);
-        return res;
+        return builder_to_string(*builder);
     }
     
     nodes := compiler_get_nodes(code);
@@ -171,7 +189,25 @@ __format_code :: ($code: Code, $format_rules: [$RULE_COUNT] Code_Format_Rule, $c
         write_string(sprintx(nodes,, temp));
         write_string("\n\n");
     }
+    
     return compiler_get_code(nodes, code_to_copy_scope_from);
+}
+
+format_code_to_nodes :: ($code: Code, format_rules: ..Node_Format_Rule, allocator: Allocator, $location := #caller_location) -> *Code_Node {
+    formatter: Code_Formatter;
+    formatter.allocator    = allocator;
+    formatter.format_rules = format_rules;
+    
+    nodes := compiler_get_nodes(code);
+    nodes = format_code(*formatter, nodes);
+    
+    #if DEBUG {
+        print("%:%,%: format_code returned:\n\n", location.fully_pathed_filename, location.line_number, location.character_number);
+        write_string(sprintx(nodes,, temp));
+        write_string("\n\n");
+    }
+    
+    return nodes;
 }
 
 format_code :: (formatter: *Code_Formatter, code: *Code_Node) -> *Code_Node {
@@ -238,10 +274,10 @@ match_code :: (formatter: *Code_Formatter, match_expression: *Match_Expression, 
     
     if #complete code.kind == {
       case .IDENT;
-        log("checking for match on identifier: %", code.(*Code_Ident).name);
-        log("code_to_match: %", code_to_match.*);
+        // log("checking for match on identifier: %", code.(*Code_Ident).name);
+        // log("code_to_match: %", code_to_match.*);
         _code, _match := get_code_and_match_as(Code_Ident);
-        log("comapring identifier: % == % -> %", _code.name, _match.name, _code.name == _match.name);
+        // log("comapring identifier: % == % -> %", _code.name, _match.name, _code.name == _match.name);
         return _code.name == _match.name;
         
       case .BINARY_OPERATOR;
@@ -608,36 +644,6 @@ Code_Visit :: #import "Code_Visit";
 
 
 
-create_format_rule :: (formatter: *Code_Formatter, code_rule: Code_Format_Rule) -> Node_Format_Rule {
-    node_rule: Node_Format_Rule;
-    
-    match_expression_walk_proc :: (formatter: *Code_Formatter, code: *Code_Node, match_expression: *Match_Expression) -> Walk_Nodes_Return_Code, *Code_Node {
-        code_ident := is_backticked_identifier(code);
-        if code_ident {
-            ext_exp := New(Extract_Expression,, get_allocator(formatter));
-            ext_exp.ident = code_ident;
-            array_add(*match_expression.extract_expressions, ext_exp);
-            return .RETURN, ext_exp;
-        }
-        return .CONTINUE, code;
-    };
-    
-    node_rule.match_expression.root = compiler_get_nodes(code_rule.match_expression);
-    node_rule.match_expression.root = walk_nodes(
-        match_expression_walk_proc, 
-        formatter, 
-        node_rule.match_expression.root, 
-        *node_rule.match_expression,
-        modify_in_place = true,
-    );
-    
-    // TODO: We should experiment later with preprocessing the insert expression to optimize subexpression re-insertions.
-    node_rule.insert_expression = compiler_get_nodes(code_rule.insert_expression);
-    
-    return node_rule;
-}
-
-
 is_backticked_identifier :: (node: *Code_Node) -> *Code_Ident {
     ident := node.(*Code_Ident);
     return ifx ident.kind == .IDENT && (ident.flags & .HAS_SCOPE_MODIFIER) then ident;
@@ -648,10 +654,10 @@ create_replacement_nodes :: (formatter: *Code_Formatter, found_expression: *Code
     if rule.match_expression.extract_expressions {
         // We need to override the current format rules so that we can run the formatter on the insert expression.
         // So we back up the original rules and restore them  when we return.
-        old_rules := formatter.format_rules;
-        defer formatter.format_rules = old_rules;
-        formatter.format_rules = create_format_rules_from_extract_expressions(formatter, rule.match_expression.extract_expressions);
-        result = format_code(formatter, rule.insert_expression);
+        insert_formatter: Code_Formatter;
+        insert_formatter.allocator = formatter.allocator;
+        insert_formatter.format_rules = create_format_rules_from_extract_expressions(*insert_formatter, rule.match_expression.extract_expressions);
+        result = format_code(*insert_formatter, rule.insert_expression);
         
         // TODO: Improve contextual awareness so we can provide better logs. 
         //       I would like to log the replacements for even simple formats when modifying the input code, but the result can be very spammy.
@@ -669,13 +675,14 @@ create_replacement_nodes :: (formatter: *Code_Formatter, found_expression: *Code
 }
 
 create_format_rules_from_extract_expressions :: (formatter: *Code_Formatter, extract_expressions: [] *Extract_Expression) -> [] Node_Format_Rule {
+    // TODO: maybe allocate rules using temp instead of node memory pool?
     rules := NewArray(extract_expressions.count, Node_Format_Rule,, get_allocator(formatter));
     for extract_expressions {
         rules[it_index] = .{
             match_expression = .{
                 // We can't use the existing identifier because it is backticked, 
                 // so we just make a new one for the match expression.
-                root = make_identifier(it.name,, get_allocator(formatter)),
+                root = make_ident(it.name,, get_allocator(formatter)),
             },
             insert_expression = it.found_expression,
         };
@@ -765,33 +772,33 @@ shallow_copy_node :: (from: *Code_Node) -> *Code_Node {
 }
 
 get_allocator :: (formatter: *Code_Formatter) -> Allocator {
-    return .{ flat_pool_allocator_proc, *formatter.memory_pool };
+    return formatter.allocator;
 }
 
-is_this_yours :: (pool: *Flat_Pool, memory: *void) -> bool {
-    return flat_pool_allocator_proc(.IS_THIS_YOURS, 0, 0, memory, pool).(bool);
+is_this_yours :: (formatter: *Code_Formatter, memory: *void) -> bool {
+    return formatter.allocator.proc(.IS_THIS_YOURS, 0, 0, memory, formatter.allocator.data).(bool);
 }
 
 copy_to_pool :: (formatter: *Code_Formatter, node: *Code_Node) -> *Code_Node {
-    if is_this_yours(*formatter.memory_pool, node)  return node;
-    return shallow_copy_node(node);
+    if is_this_yours(formatter, node)  return node;
+    return shallow_copy_node(node,, get_allocator(formatter));
 }
 
 copy_to_pool :: (formatter: *Code_Formatter, data: *$T) -> *T {
-    if is_this_yours(*formatter.memory_pool, data)  return data;
+    if is_this_yours(*formatter, data)  return data;
     
     SIZE :: size_of(T);
-    copy := alloc(SIZE);
+    copy := alloc(SIZE,, get_allocator(formatter));
     memcpy(copy, data, SIZE);
     return copy;
 }
 
 // TODO: should we call shallow_copy_node when T is a Code Node type?
 copy_to_pool :: inline (formatter: *Code_Formatter, array: []$T) -> []T {
-    if is_this_yours(*formatter.memory_pool, array.data)  return array;
+    if is_this_yours(formatter, array.data)  return array;
     
     ELEMENT_SIZE :: size_of(T);
-    copy := alloc(array.count * ELEMENT_SIZE);
+    copy := alloc(array.count * ELEMENT_SIZE,, get_allocator(formatter));
     memcpy(copy, array.data, array.count * ELEMENT_SIZE);
     return ([]T).{ count = array.count, data = copy };
 }
@@ -854,7 +861,6 @@ walk_nodes :: (
     
     __return :: (result: *Code_Node) #expand {
         #if run_proc_on_return {
-            log("run_proc_on_return: %", sprintx(code));
             return_code, new := proc(formatter, result, user_data);
             if #complete return_code == {
               case .CONTINUE;   // no op
@@ -1290,14 +1296,6 @@ ensure_correctness :: (node: *Code_Node) {
 // 1 - just put the logic for get_extracted_expression_by_name directly into the inserted code so we don't need access to this procedure's scope at all.
 // 2 - put get_extracted_expression_by_name in module scope and use an import of Code_Format to get at the procedure.
 generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match_Expression, *Code_Node) -> bool) {
-    get_extracted_expression_by_name :: (match_expression: *Match_Expression, name: string) -> *Code_Node {
-        for match_expression.extract_expressions {
-            if it.name == name  return it.found_expression;
-        }
-        assert(false, "Invalid identifier used in filter code: %2");
-        return null;
-    }
-    
     return (match_expression: *Match_Expression, code: *Code_Node) -> bool { 
         #insert -> Code {
             root := compiler_get_nodes(filter_code);
@@ -1315,7 +1313,7 @@ generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match
                     declaration := New(Code_Declaration);
                     declaration.name = it.name;
                     declaration.expression = make_procedure_call("get_extracted_expression_by_name", 
-                        .{ expression = make_identifier("match_expression") },
+                        .{ expression = make_ident("match_expression") },
                         .{ expression = make_string_literal(it.name) },
                     );
                     block.statements[it_index] = declaration;
@@ -1350,4 +1348,32 @@ generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match
         return true;
     };
 }
+
+
+get_extracted_expression_by_name :: (match_expression: *Match_Expression, name: string) -> *Code_Node {
+    for match_expression.extract_expressions {
+        if it.name == name  return it.found_expression;
+    }
+    assert(false, "Invalid identifier used in filter code: %2");
+    return null;
+}
+
+/*
+    TODO: make the following usage example work
+          will require lambda nonsense, and the abilty to attach an Any as the insert expression rather than code nodes
+          if an Any is passed, we should just insert the value as a literal
+    
+    total_offset_in_bytes := parent_offset_in_bytes + member.offset_in_bytes;
+    nodes := Code_Format.simple_substitution( 
+        (#code render_page(site, (site.(*void) + offset).(*Template) )),
+        offset => total_offset_in_bytes,
+        allocator = builder.allocator
+    );
+    
+    simple_substitution_to_nodes :: (code: Code) -> *Code_Node {
+        
+    }
+*/
+
+
 
