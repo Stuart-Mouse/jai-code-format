@@ -28,6 +28,10 @@ make_dot_dereference :: (lhs: *Code_Node, member_name: string) -> *Code_Binary_O
     return make_binary_operator(#char ".", lhs, make_ident(member_name));
 }
 
+make_assignment :: (lhs: *Code_Node, rhs: *Code_Node) -> *Code_Binary_Operator {
+    return make_binary_operator(#char "=", lhs, rhs);
+}
+
 
 make_procedure_call :: (procedure_name: string, arguments: ..Code_Argument) -> *Code_Procedure_Call {
     call := New(Code_Procedure_Call);
