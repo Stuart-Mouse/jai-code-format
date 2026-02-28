@@ -159,7 +159,8 @@ create_node_format_rule :: (formatter: *Code_Formatter, $code_format_rule: Code_
     node_rule.insert_expression = compiler_get_nodes(code_format_rule.insert_expression);
     
     // NOTE: The call to generate_filter_proc is the reason why code_format_rule must be constant.
-    node_rule.match_expression.filter = generate_filter_proc(#run code_format_rule.filter, code_to_copy_scope_from);
+    node_rule.match_expression.filter = #ifx #run code_format_rule.filter 
+        then generate_filter_proc(#run code_format_rule.filter, code_to_copy_scope_from) else null;
     
     return node_rule;
 }
@@ -1292,11 +1293,61 @@ ensure_correctness :: (node: *Code_Node) {
 }
 
 
+/*
+    The main problem we have with making this filter proc stuff work properly is that we can't just insert a procedure declaration with the proper scope.
+    And we can't get around this by only inserting the body of the filter proc, because then we don't have any way of getting the procedure arguments, which we need.
+    
+    The next trick I tried was to insert the body of the filter proc into a helper macro, and then backticking the identifiers we need from the calling scope.
+    But this just does not work for some reason. The compiler complains that we are trying to use a backticked identifier outside of a macro, but the place where the code is inserted is in a macro... So I dunno.
+*/
+
 // TODO: try 2 potential solutions:
 // 1 - just put the logic for get_extracted_expression_by_name directly into the inserted code so we don't need access to this procedure's scope at all.
 // 2 - put get_extracted_expression_by_name in module scope and use an import of Code_Format to get at the procedure.
 generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match_Expression, *Code_Node) -> bool) {
-    return (match_expression: *Match_Expression, code: *Code_Node) -> bool { 
+    #assert filter_code != #code,null;
+    
+    helper :: (nodes: [] *Code_Node) -> bool #expand {
+        #insert -> string {
+            root := compiler_get_nodes(filter_code);
+            assert(root != null);
+            assert(root.kind == .PROCEDURE_HEADER, "incorrect node kind");
+            
+            header := root.(*Code_Procedure_Header);
+            assert(header.procedure_flags & .QUICK == .QUICK);
+            
+            builder: String_Builder;
+            
+            for header.arguments {
+                print(*builder, "`% := nodes[%];\n", it.name, it_index);
+            }
+            
+            return builder_to_string(*builder);
+        }
+        #insert,scope(scope) -> Code {
+            root := compiler_get_nodes(filter_code);
+            assert(root != null);
+            assert(root.kind == .PROCEDURE_HEADER, "incorrect node kind");
+            
+            header := root.(*Code_Procedure_Header);
+            assert(header.procedure_flags & .QUICK == .QUICK);
+            
+            block := New(Code_Block);
+            block.block_type = .IMPERATIVE;
+            block.statements = header.body_or_null.block.statements;
+            block.node_flags |= .IS_PARENTHESIZED;
+            
+            return_statement := block.statements[block.statements.count-1].(*Code_Return);
+            if return_statement.kind == .RETURN {
+                return_statement.return_flags &= ~.AUTO_INSERTED_FOR_QUICK_LAMBDA;
+            }
+            
+            print_code(block);
+            return compiler_get_code(block);
+        }
+    }
+    
+    filter_proc :: (match_expression: *Match_Expression, code: *Code_Node) -> bool { 
         #insert -> Code {
             root := compiler_get_nodes(filter_code);
             if root == null  return #code,null;
@@ -1307,46 +1358,33 @@ generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match
                 
                 block := New(Code_Block);
                 block.block_type = .IMPERATIVE;
-                block.statements = NewArray(header.arguments.count, *Code_Node);
+                block.statements = NewArray(header.arguments.count + 2, *Code_Node);
+                
+                block.statements[0] = compiler_get_nodes(#code get :: (#import "Code_Format").get_extracted_expression_by_name);
                 
                 for header.arguments {
                     declaration := New(Code_Declaration);
                     declaration.name = it.name;
-                    declaration.expression = make_procedure_call("get_extracted_expression_by_name", 
+                    declaration.expression = make_procedure_call("get", 
                         .{ expression = make_ident("match_expression") },
                         .{ expression = make_string_literal(it.name) },
                     );
-                    block.statements[it_index] = declaration;
+                    block.statements[it_index+1] = declaration;
                 }
                 
+                return_statement := compiler_get_nodes(#code return helper(.[a]));
+                block.statements[block.statements.count-1] = return_statement;
+                
+                print_code(block);
                 return compiler_get_code(block);
             }
-            return #code,null;
-        }
-        #insert -> Code {
-            root := compiler_get_nodes(filter_code);
-            if root == null  return #code,null;
             
-            if root.kind == .PROCEDURE_HEADER {
-                header := root.(*Code_Procedure_Header);
-                assert(header.procedure_flags & .QUICK == .QUICK);
-                
-                // Because of scoping issues when inserting procedures, we actually need to insert only the body code here.
-                // AAARGGH I can't get the scope I need for the result block...
-                result_block := header.body_or_null.block.*;
-                
-                return_statement := New(Code_Return);
-                return_statement.arguments_unsorted = NewArray(1, Code_Argument);
-                return_statement.arguments_unsorted[0] = .{ expression = make_if(make_integer_literal(1), *result_block, null, .IS_IFX) };
-                
-                result_block.owning_statement = return_statement;
-                
-                return compiler_get_code(return_statement);
-            }
             return #code,null;
-        }
+        };
         return true;
     };
+    
+    return filter_proc;
 }
 
 

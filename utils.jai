@@ -6,6 +6,7 @@
 make_ident :: (name: string, flags: type_of(Code_Ident.flags) = xx 0) -> *Code_Ident {
     ident := New(Code_Ident);
     ident.name = name;
+    ident.flags = flags;
     return ident;
 }
 
