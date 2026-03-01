@@ -1307,7 +1307,7 @@ ensure_correctness :: (node: *Code_Node) {
 generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match_Expression, *Code_Node) -> bool) {
     #assert filter_code != #code,null;
     
-    helper :: (nodes: [] *Code_Node) -> bool #expand {
+    helper :: (nodes: ..*Code_Node) -> bool #expand {
         #insert -> string {
             root := compiler_get_nodes(filter_code);
             assert(root != null);
@@ -1362,6 +1362,8 @@ generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match
                 
                 block.statements[0] = compiler_get_nodes(#code get :: (#import "Code_Format").get_extracted_expression_by_name);
                 
+                helper_arguments := NewArray(header.arguments.count, Code_Argument);
+                
                 for header.arguments {
                     declaration := New(Code_Declaration);
                     declaration.name = it.name;
@@ -1370,9 +1372,11 @@ generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match
                         .{ expression = make_string_literal(it.name) },
                     );
                     block.statements[it_index+1] = declaration;
+                    
+                    helper_arguments[it_index] = .{ expression = make_ident(it.name) };
                 }
                 
-                return_statement := compiler_get_nodes(#code return helper(.[a]));
+                return_statement := make_return(.{ expression = make_procedure_call("helper", ..helper_arguments) });
                 block.statements[block.statements.count-1] = return_statement;
                 
                 print_code(block);

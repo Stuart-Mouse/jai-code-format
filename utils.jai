@@ -189,6 +189,11 @@ make_float64_literal :: (v: float64) -> *Code_Literal {
     return literal;
 }
 
+make_return :: (return_values: ..Code_Argument) -> *Code_Return {
+    return_statement := New(Code_Return);
+    return_statement.arguments_unsorted = return_values;
+    return return_statement;
+}
 
 
 
