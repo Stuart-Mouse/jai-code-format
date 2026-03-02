@@ -117,6 +117,12 @@ make_type_inst_pointer_to :: (pointer_to: *Code_Type_Instantiation) {
     return type_inst;
 }
 
+make_cast :: (target_type: *Code_Type_Instantiation, expression: *Code_Node) -> *Code_Cast {
+    code_cast := New(Code_Cast);
+    code_cast.target_type = target_type;
+    code_cast.expression  = expression;
+    return code_cast;
+}
 
 make_if :: (condition: *Code_Node, then_block: *Code_Block, else_block: *Code_Block, flags: type_of(Code_If.if_flags)) -> *Code_If {
     code := New(Code_If);
@@ -194,6 +200,21 @@ make_return :: (return_values: ..Code_Argument) -> *Code_Return {
     return_statement.arguments_unsorted = return_values;
     return return_statement;
 }
+
+make_directive_code :: (expression: *Code_Node) -> *Code_Directive_Code {
+    code := New(Code_Directive_Code);
+    code.expression = expression;
+    return code;
+}
+
+// maybe this should go in a different module, but this is where it is most useful for now, due to the amount of code node allocations we do.
+New :: ($T: Type, $initial: T) -> *T #expand {
+    memory := alloc(size_of(T));
+    memory.(*T).* = initial;
+    return memory.(*T);
+}
+
+
 
 
 
