@@ -1299,6 +1299,8 @@ ensure_correctness :: (node: *Code_Node) {
     
     The next trick I tried was to insert the body of the filter proc into a helper macro, and then backticking the identifiers we need from the calling scope.
     But this just does not work for some reason. The compiler complains that we are trying to use a backticked identifier outside of a macro, but the place where the code is inserted is in a macro... So I dunno.
+    
+    TODO: to solve the problem of referencing the helper macros' arguments from the code inserted in the body, try using Code for the arguments and inserting those into the generated body code, somehow.
 */
 
 // TODO: try 2 potential solutions:
