@@ -1301,31 +1301,16 @@ ensure_correctness :: (node: *Code_Node) {
     But this just does not work for some reason. The compiler complains that we are trying to use a backticked identifier outside of a macro, but the place where the code is inserted is in a macro... So I dunno.
     
     TODO: to solve the problem of referencing the helper macros' arguments from the code inserted in the body, try using Code for the arguments and inserting those into the generated body code, somehow.
+            this does not work because we can't make a nested inserter that references the helper's arguments, so same issue here
+          we could try doing something utterly bonkers and using a for_expansion to perform the work of the helper macro.
+            first step would be testing how th backtick operator actually works in a for expansion, and see if works the way I think it might
+    
 */
 
-// TODO: try 2 potential solutions:
-// 1 - just put the logic for get_extracted_expression_by_name directly into the inserted code so we don't need access to this procedure's scope at all.
-// 2 - put get_extracted_expression_by_name in module scope and use an import of Code_Format to get at the procedure.
 generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match_Expression, *Code_Node) -> bool) {
     #assert filter_code != #code,null;
     
-    helper :: (nodes: ..*Code_Node) -> bool #expand {
-        #insert -> string {
-            root := compiler_get_nodes(filter_code);
-            assert(root != null);
-            assert(root.kind == .PROCEDURE_HEADER, "incorrect node kind");
-            
-            header := root.(*Code_Procedure_Header);
-            assert(header.procedure_flags & .QUICK == .QUICK);
-            
-            builder: String_Builder;
-            
-            for header.arguments {
-                print(*builder, "`% := nodes[%];\n", it.name, it_index);
-            }
-            
-            return builder_to_string(*builder);
-        }
+    helper :: ($params: ..Code) -> bool #expand {
         #insert,scope(scope) -> Code {
             root := compiler_get_nodes(filter_code);
             assert(root != null);
@@ -1333,6 +1318,24 @@ generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match
             
             header := root.(*Code_Procedure_Header);
             assert(header.procedure_flags & .QUICK == .QUICK);
+            
+            outer_block := New(Code_Block);
+            outer_block.block_type = .IMPERATIVE;
+            outer_block.node_flags |= .IS_PARENTHESIZED;
+            outer_block.statements = NewArray(params.count + 1, *Code_Node);
+            
+            for params {
+                // TODO: should handle params being non-identifier
+                ident := compiler_get_nodes(it).(*Code_Ident);
+                assert(ident.kind == .IDENT);
+                
+                inserter := New(Code_Directive_Insert, .{
+                    expression        = ident,
+                    scope_redirection = make_directive_code(ident),
+                });
+                
+                outer_block.statements[it_index] = make_declaration(ident.name, expression = inserter);
+            }
             
             block := New(Code_Block);
             block.block_type = .IMPERATIVE;
@@ -1344,8 +1347,10 @@ generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match
                 return_statement.return_flags &= ~.AUTO_INSERTED_FOR_QUICK_LAMBDA;
             }
             
-            print_code(block);
-            return compiler_get_code(block);
+            outer_block.statements[outer_block.statements.count-1] = block;
+            
+            print_code(outer_block);
+            return compiler_get_code(outer_block);
         }
     }
     
