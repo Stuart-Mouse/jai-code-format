@@ -1,6 +1,7 @@
 
 #import "Basic";
 #import "Math";
+#import "String";
 #import "Compiler";
 
 #import "Utils";
@@ -8,82 +9,88 @@
 Program_Print :: #import "Program_Print";
 
 main :: () {
-    // // Test simple find and replace
-    // #insert #run,stallable 
-    //     format_code(#code log_eval(a + b),
-    //         { (#code a), 3, true }, 
-    //         { (#code b), 5, true },
-    //     );
+    // Test simple find and replace
+    #insert #run,stallable 
+        format_code(#code log_eval(a + b),
+            { (#code a), 3, true }, 
+            { (#code b), 5, true },
+        );
     
-    // {
-    //     sum_floats :: #insert #run,stallable format_code( code_of(sum), { int, float, true }, );
+    {
+        sum_floats :: #insert #run,stallable 
+            format_code(code_of(sum), 
+                { int, float, true }, 
+            );
         
-    //     numbers := float.[ 1, 2.5, 3.25 ];
-    //     log("sum_floats(%) -> %", numbers, sum_floats(numbers));
-    // }
+        numbers := float.[ 1, 2.5, 3.25 ];
+        log("sum_floats(%) -> %", numbers, sum_floats(numbers));
+    }
     
-    // // Test find and replace with extracted/reinserted subexpressions
-    // #insert #run,stallable 
-    //     format_code(#code log_eval(3 + 7),
-    //         { (#code `a + `b), (#code b - a), true }, 
-    //     );
+    // Test find and replace with extracted/reinserted subexpressions
+    #insert #run,stallable 
+        format_code(#code log_eval(3 + 7),
+            { (#code `a + `b), (#code b - a), true }, 
+        );
     
-    // {
-    //     negative_sum :: #insert #run,stallable format_code( code_of(sum), { (#code `a += `b), (#code a -= b), true } );
+    {
+        negative_sum :: #insert #run,stallable 
+            format_code(code_of(sum), 
+                { (#code `a += `b), (#code a -= b), true } 
+            );
         
-    //     numbers := int.[ 1, 2, 3, 4, 5 ];
-    //     log("negative_sum(%) -> %", numbers, negative_sum(numbers));
-    // }
+        numbers := int.[ 1, 2, 3, 4, 5 ];
+        log("negative_sum(%) -> %", numbers, negative_sum(numbers));
+    }
     
     
-    // // Test more complex match expressions...
-    // // Matching against literals
-    // #insert #run,stallable 
-    //     format_code(#code {
-    //             log_eval(1 + 1);
-    //             log_eval(1 + 2);
-    //             log_eval(2 + 2);
-    //         },
-    //         { (#code `a + 2), (#code a + 3), true }, 
-    //     );
+    // Test more complex match expressions...
+    // Matching against literals
+    #insert #run,stallable 
+        format_code(#code {
+                log_eval(1 + 1);
+                log_eval(1 + 2);
+                log_eval(2 + 2);
+            },
+            { (#code `a + 2), (#code a + 3), true }, 
+        );
     
-    // // TODO: should we automatically match both `a + 2 and 2 + `a when the operator is commutative? maybe pass some flag for this?
-    
-    
-    // // Matching against particular binary operators
-    // #insert #run,stallable 
-    //     format_code(#code {
-    //             log_eval(6 + 1);
-    //             log_eval(6 - 1);
-    //         },
-    //         { (#code `a - `b), (#code `a - (`b * 2)), true }, 
-    //     );
-    
-    // // Matching against particular unary operators
-    // #insert #run,stallable 
-    //     format_code(#code {
-    //             value := 5;
-    //             log_eval(+value);
-    //             log_eval(-value);
-    //         },
-    //         { (#code -`a), (#code ~`a), true }, 
-    //     );
+    // TODO: should we automatically match both `a + 2 and 2 + `a when the operator is commutative? maybe pass some flag for this?
     
     
-    // // Match a declaration
-    // // Match a compound declaration
+    // Matching against particular binary operators
+    #insert #run,stallable 
+        format_code(#code {
+                log_eval(6 + 1);
+                log_eval(6 - 1);
+            },
+            { (#code `a - `b), (#code `a - (`b * 2)), true }, 
+        );
     
-    // // Match a cast to a particular type (check actual type info if match expression and input code are typed)
-    // #insert #run,stallable 
-    //     format_code(#code {
-    //             value    := 5;
-    //             as_float := cast(float) value;
-    //             as_u16   := cast(u16) value;
-    //             log_eval(type_of(as_float));
-    //             log_eval(type_of(as_u16));
-    //         },
-    //         { (#code cast(float) `a), (#code cast(float64) `a), true }, 
-    //     );
+    // Matching against particular unary operators
+    #insert #run,stallable 
+        format_code(#code {
+                value := 5;
+                log_eval(+value);
+                log_eval(-value);
+            },
+            { (#code -`a), (#code ~`a), true }, 
+        );
+    
+    
+    // Match a declaration
+    // Match a compound declaration
+    
+    // Match a cast to a particular type (check actual type info if match expression and input code are typed)
+    #insert #run,stallable 
+        format_code(#code {
+                value    := 5;
+                as_float := cast(float) value;
+                as_u16   := cast(u16) value;
+                log_eval(type_of(as_float));
+                log_eval(type_of(as_u16));
+            },
+            { (#code cast(float) `a), (#code cast(float64) `a), true }, 
+        );
     
     
     // Test filter expressions
@@ -100,43 +107,45 @@ main :: () {
         
         bar :: #insert #run,stallable
             format_code(code_of(foo),
-                { (#code `a), (#code `a * 2), a => a.kind == .IDENT && a.(*Code_Ident).name[0] == "a" && a.type.type == .INTEGER }, 
+                { 
+                    (#code `a), 
+                    (#code `a * 2), 
+                    a => is_integer(a) && ident_begins_with(a, "a")
+                }, 
             );
         
         bar();
     }
     
-    // {
-    //     floor_float_to_int :: (x: float, $T: Type) -> T #modify {
-    //         return T.(*Type_Info).type == .INTEGER;
-    //     } {
-    //         return cast(T) floor(x); 
-    //     }
+    {
+        floor_float_to_int :: (x: float, $T: Type) -> T #modify {
+            return T.(*Type_Info).type == .INTEGER;
+        } {
+            return cast(T) floor(x); 
+        }
         
-    //     foo :: () {
-    //         {
-    //             _int: int;
-    //             _float := cast(float) _int;
-    //         }
-            
-    //         {
-    //             _float: float;
-    //             _int := cast(int) _float;
-    //         }
-    //     }
+        foo :: () {
+            {
+                _int: int;
+                _float := cast(float) _int;
+            }
+            {
+                _float: float;
+                _int := cast(int) _float;
+            }
+        }
         
-    //     bar :: #insert #run,stallable
-    //         format_code(code_of(foo),
-    //             { 
-    //                 (#code cast(`T) `a), 
-    //                 (#code floor_float_to_int(a, T)), 
-    //                 (a, T) => a.type.type == .FLOAT && echo(T.kind)
-    //             }, 
-    //             code_to_copy_scope_from = echo
-    //         );
+        bar :: #insert #run,stallable
+            format_code(code_of(foo),
+                { 
+                    (#code cast(`T) `a), 
+                    (#code floor_float_to_int(a, T)), 
+                    (a, T) => a.type.type == .FLOAT
+                }, 
+            );
         
-    //     bar();
-    // }
+        bar();
+    }
     
     // Test recursive replacements...
     // replace a + (b + c) with a - (b - c)
@@ -157,12 +166,20 @@ main :: () {
         
         TODO: build an operator precedence lookup table and add logic to Program_Print to respect operator precedence by automatically inserting parentheses where required.
     */ 
-    // #insert #run,stallable 
-    //     format_code(#code log_eval(1 + 2 + 3),
-    //         { (#code `a + `b), (#code b - a), true }, 
-    //     );
+    #insert #run,stallable 
+        format_code(#code log_eval(1 + 2 + 3),
+            { (#code `a + `b), (#code b - a), true }, 
+        );
     
     
+}
+
+is_integer :: (code: *Code_Node) -> bool {
+    return code.type != null && code.type.type == .INTEGER;
+}
+
+ident_begins_with :: (code: *Code_Node, prefix: string) -> bool {
+    return code.kind == .IDENT && begins_with(code.(*Code_Ident).name, prefix);
 }
 
 echo :: (value: $T) -> T {

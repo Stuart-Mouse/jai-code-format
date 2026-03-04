@@ -374,3 +374,12 @@ count_assignable_members :: (struct_info: *Type_Info_Struct) -> int {
 
 Reflect :: #import "Reflect";
 
+
+remove_implicit_return_from_quick_lambda_body_block :: (block: *Code_Block) {
+    return_statement := block.statements[block.statements.count-1].(*Code_Return);
+    if return_statement.kind == .RETURN {
+        return_statement.return_flags &= ~.AUTO_INSERTED_FOR_QUICK_LAMBDA;
+    }
+}
+
+

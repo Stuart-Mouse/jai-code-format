@@ -1293,104 +1293,49 @@ ensure_correctness :: (node: *Code_Node) {
 }
 
 
-/*
-    The main problem we have with making this filter proc stuff work properly is that we can't just insert a procedure declaration with the proper scope.
-    And we can't get around this by only inserting the body of the filter proc, because then we don't have any way of getting the procedure arguments, which we need.
-    
-    The next trick I tried was to insert the body of the filter proc into a helper macro, and then backticking the identifiers we need from the calling scope.
-    But this just does not work for some reason. The compiler complains that we are trying to use a backticked identifier outside of a macro, but the place where the code is inserted is in a macro... So I dunno.
-    
-    TODO: to solve the problem of referencing the helper macros' arguments from the code inserted in the body, try using Code for the arguments and inserting those into the generated body code, somehow.
-            this does not work because we can't make a nested inserter that references the helper's arguments, so same issue here
-          we could try doing something utterly bonkers and using a for_expansion to perform the work of the helper macro.
-            first step would be testing how th backtick operator actually works in a for expansion, and see if works the way I think it might
-    
-*/
-
 generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match_Expression, *Code_Node) -> bool) {
     #assert filter_code != #code,null;
     
-    helper :: ($params: ..Code) -> bool #expand {
-        #insert,scope(scope) -> Code {
+    filter_proc :: (match_expression: *Match_Expression, code: *Code_Node) -> bool { 
+        // This is a ridiculous hack in which we use temp storage to marshall a pointer to this procedure's arguments into the scope of the inserted filter code.
+        // This is unfortunately required because there is not currently any mechanism in the langauge to make the procedure arguments or other local variables visible to the inserted code.
+        New(*void,, temp).* = *match_expression;
+        
+        #insert,scope(filter_code) -> Code {
             root := compiler_get_nodes(filter_code);
-            assert(root != null);
-            assert(root.kind == .PROCEDURE_HEADER, "incorrect node kind");
+            if root == null || root.kind != .PROCEDURE_HEADER  return #code,null;
             
             header := root.(*Code_Procedure_Header);
             assert(header.procedure_flags & .QUICK == .QUICK);
             
-            outer_block := New(Code_Block);
-            outer_block.block_type = .IMPERATIVE;
-            outer_block.node_flags |= .IS_PARENTHESIZED;
-            outer_block.statements = NewArray(params.count + 1, *Code_Node);
+            statements: [..] *Code_Node;
+            statements.allocator = temp;
+            array_reserve(*statements, header.arguments.count + 3);
             
-            for params {
-                // TODO: should handle params being non-identifier
-                ident := compiler_get_nodes(it).(*Code_Ident);
-                assert(ident.kind == .IDENT);
-                
-                inserter := New(Code_Directive_Insert, .{
-                    expression        = ident,
-                    scope_redirection = make_directive_code(ident),
-                });
-                
-                outer_block.statements[it_index] = make_declaration(ident.name, expression = inserter);
+            array_add(*statements, compiler_get_nodes(#code __get__ :: (#import "Code_Format").get_extracted_expression_by_name));
+            array_add(*statements, compiler_get_nodes(#code match_expression := (context.temporary_storage.data + context.temporary_storage.current_page_bytes_occupied - size_of(*void)).(***Match_Expression).*.*));
+            
+            match_expression_ident := make_ident("match_expression");
+            
+            for header.arguments {
+                declaration := New(Code_Declaration);
+                declaration.name = it.name;
+                declaration.expression = make_procedure_call("__get__", 
+                    .{ match_expression_ident, null },
+                    .{ make_string_literal(it.name),   null },
+                );
+                array_add(*statements, declaration);
             }
+            
+            remove_implicit_return_from_quick_lambda_body_block(header.body_or_null.block);
+            array_add(*statements, header.body_or_null.block);
             
             block := New(Code_Block);
             block.block_type = .IMPERATIVE;
-            block.statements = header.body_or_null.block.statements;
-            block.node_flags |= .IS_PARENTHESIZED;
-            
-            return_statement := block.statements[block.statements.count-1].(*Code_Return);
-            if return_statement.kind == .RETURN {
-                return_statement.return_flags &= ~.AUTO_INSERTED_FOR_QUICK_LAMBDA;
-            }
-            
-            outer_block.statements[outer_block.statements.count-1] = block;
-            
-            print_code(outer_block);
-            return compiler_get_code(outer_block);
-        }
-    }
-    
-    filter_proc :: (match_expression: *Match_Expression, code: *Code_Node) -> bool { 
-        #insert -> Code {
-            root := compiler_get_nodes(filter_code);
-            if root == null  return #code,null;
-            
-            if root.kind == .PROCEDURE_HEADER {
-                header := root.(*Code_Procedure_Header);
-                assert(header.procedure_flags & .QUICK == .QUICK);
-                
-                block := New(Code_Block);
-                block.block_type = .IMPERATIVE;
-                block.statements = NewArray(header.arguments.count + 2, *Code_Node);
-                
-                block.statements[0] = compiler_get_nodes(#code get :: (#import "Code_Format").get_extracted_expression_by_name);
-                
-                helper_arguments := NewArray(header.arguments.count, Code_Argument);
-                
-                for header.arguments {
-                    declaration := New(Code_Declaration);
-                    declaration.name = it.name;
-                    declaration.expression = make_procedure_call("get", 
-                        .{ expression = make_ident("match_expression") },
-                        .{ expression = make_string_literal(it.name) },
-                    );
-                    block.statements[it_index+1] = declaration;
-                    
-                    helper_arguments[it_index] = .{ expression = make_ident(it.name) };
-                }
-                
-                return_statement := make_return(.{ expression = make_procedure_call("helper", ..helper_arguments) });
-                block.statements[block.statements.count-1] = return_statement;
-                
-                print_code(block);
-                return compiler_get_code(block);
-            }
-            
-            return #code,null;
+            block.statements = statements;
+
+            // print_code(block);
+            return compiler_get_code(block);
         };
         return true;
     };
@@ -1403,7 +1348,7 @@ get_extracted_expression_by_name :: (match_expression: *Match_Expression, name: 
     for match_expression.extract_expressions {
         if it.name == name  return it.found_expression;
     }
-    assert(false, "Invalid identifier used in filter code: %2");
+    assert(false, "Invalid identifier used in filter code: %", name);
     return null;
 }
 
