@@ -1,8 +1,14 @@
 
 Code_Builder :: struct {
+    allocator:                  Allocator;
     node_stack:                 [..] *Code_Node;
     index_of_current_block:     int = -1;
-    memory_pool:                Flat_Pool;
+}
+
+// NOTE: We use the temp allocator by default because we don't want to have to think about individually freeing code nodes.
+//       In most cases, the user will probably want to provide their own allocator (usually a pool of some sort) which is being used in a borader scope than the code builder.
+init :: (builder: *Code_Builder, allocator := temp) {
+    builder.allocator = allocator;
 }
 
 deinit :: (builder: *Code_Builder) {
@@ -10,7 +16,7 @@ deinit :: (builder: *Code_Builder) {
 }
 
 get_allocator :: (builder: *Code_Builder) -> Allocator {
-    return .{ flat_pool_allocator_proc, *builder.memory_pool };
+    return builder.allocator;
 }
 
 push_node_stack ::  (builder: *Code_Builder, node: *Code_Node) {
@@ -75,9 +81,10 @@ peek_node_stack :: (builder: *Code_Builder, $kind: Code_Node.Kind) -> *$R
 }
 
 
-begin_block :: (builder: *Code_Builder, block_type: type_of(Code_Block.block_type), block_flags: type_of(Code_Block.block_type) = xx 0) -> *Code_Block {
+begin_block :: (builder: *Code_Builder, block_type: type_of(Code_Block.block_type), block_flags: type_of(Code_Block.block_flags) = xx 0) -> *Code_Block {
     code_block := New(Code_Block);
     code_block.block_type = block_type;
+    code_block.block_flags = block_flags;
     code_block.node_flags = .IS_PARENTHESIZED;
     code_block.parent = get_current_block(builder); // NOTE: may be null
     push_node_stack_block(builder, code_block);

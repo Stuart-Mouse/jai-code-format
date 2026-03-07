@@ -116,20 +116,20 @@ Node_Format_Rule :: struct {
 
 Match_Expression :: struct {
     root:                   *Code_Node;
-    extract_expressions:    [..] *Extract_Expression;
+    extracted_expressions:  [..] *Extracted_Expression;
     filter:                 (*Match_Expression, *Code_Node) -> bool;
 }
 
-Extract_Expression :: struct {
+Extracted_Expression :: struct {
     using #as ident:    Code_Ident;
-    found_expression:   *Code_Node;
-    // found_expressions:  [] *Code_Node;
+    expression:         *Code_Node;
+    // expressions:  [] *Code_Node;
 }
 
 Code_Format_Rule :: struct {
-    match_expression:  Code;
-    insert_expression: Code;
-    filter: Code;
+    match_expression:   Code;
+    insert_expression:  Code;
+    filter:             Code;
 }
 
 create_node_format_rule :: (formatter: *Code_Formatter, $code_format_rule: Code_Format_Rule, $code_to_copy_scope_from: Code) -> Node_Format_Rule {
@@ -138,13 +138,20 @@ create_node_format_rule :: (formatter: *Code_Formatter, $code_format_rule: Code_
     match_expression_walk_proc :: (formatter: *Code_Formatter, code: *Code_Node, match_expression: *Match_Expression) -> Walk_Nodes_Return_Code, *Code_Node {
         code_ident := is_backticked_identifier(code);
         if code_ident {
-            ext_exp := New(Extract_Expression,, get_allocator(formatter));
+            ext_exp := New(Extracted_Expression,, get_allocator(formatter));
             ext_exp.ident = code_ident;
-            array_add(*match_expression.extract_expressions, ext_exp);
+            array_add(*match_expression.extracted_expressions, ext_exp);
             return .RETURN, ext_exp;
         }
         return .CONTINUE, code;
     };
+    
+    // make extracted expression for root
+    {
+        ext_exp := New(Extracted_Expression,, get_allocator(formatter));
+        ext_exp.ident = make_ident("root", flags = .HAS_SCOPE_MODIFIER,, get_allocator(formatter));
+        array_add(*node_rule.match_expression.extracted_expressions, ext_exp);
+    }
     
     node_rule.match_expression.root = compiler_get_nodes(code_format_rule.match_expression);
     node_rule.match_expression.root = walk_nodes(
@@ -225,6 +232,11 @@ format_code :: (formatter: *Code_Formatter, code: *Code_Node) -> *Code_Node {
 try_getting_replacement_nodes :: (formatter: *Code_Formatter, code: *Code_Node, _: *void) -> Walk_Nodes_Return_Code, *Code_Node {
     for *rule: formatter.format_rules {
         if match_code(formatter, *rule.match_expression, code, rule.match_expression.root) {
+            // set the root extracted expression before running the filter proc
+            if rule.match_expression.extracted_expressions {
+                rule.match_expression.extracted_expressions[0].expression = code;
+            }
+            
             filter := rule.match_expression.filter;
             if filter && !filter(*rule.match_expression, code) {
                 return .CONTINUE, code;
@@ -240,7 +252,7 @@ match_code :: (formatter: *Code_Formatter, match_expression: *Match_Expression, 
         code_ident := is_backticked_identifier(code_to_match);
         if code_ident { 
             if code_ident.name != "_" {
-                code_ident.(*Extract_Expression).found_expression = code;
+                code_ident.(*Extracted_Expression).expression = code;
             }
             return true;
         }
@@ -412,7 +424,7 @@ match_code :: (formatter: *Code_Formatter, match_expression: *Match_Expression, 
         
         // if _code.iteration_expression_right {
         //     // TODO: special case for when _match.iteration_expression is wildcard
-        //     //       will require modifications to Extract_Expression to handle multi-mode cases...
+        //     //       will require modifications to Extracted_Expression to handle multi-mode cases...
         //     if !match(_code.iteration_expression,       _match.iteration_expression)        return false;
         //     if !match(_code.iteration_expression_right, _match.iteration_expression_right)  return false;
         // } else {
@@ -517,6 +529,8 @@ match_code :: (formatter: *Code_Formatter, match_expression: *Match_Expression, 
         if _code.must_implement {
             return match(_code.must_implement, _match.must_implement);
         }
+        
+        // TODO: if type_value_expression is an ident, we want to return the type inst node as the matched node rather than the identifier?
         
         return match(_code.type_valued_expression, _match.type_valued_expression);
         
@@ -640,8 +654,12 @@ match_code :: (formatter: *Code_Formatter, match_expression: *Match_Expression, 
 #import "Basic";
 #import "String";
 #import "Flat_Pool";    // TODO: probably just replace with Pool or temp allocator.
+
 Program_Print :: #import "Program_Print";
-Code_Visit :: #import "Code_Visit";
+Code_Visit    :: #import "Code_Visit";
+
+// TODO: module/program parameters for quick lambda namespace struct
+
 
 
 
@@ -650,24 +668,26 @@ is_backticked_identifier :: (node: *Code_Node) -> *Code_Ident {
     return ifx ident.kind == .IDENT && (ident.flags & .HAS_SCOPE_MODIFIER) then ident;
 }
 
-create_replacement_nodes :: (formatter: *Code_Formatter, found_expression: *Code_Node, rule: Node_Format_Rule) -> *Code_Node {
+create_replacement_nodes :: (formatter: *Code_Formatter, expression: *Code_Node, rule: Node_Format_Rule) -> *Code_Node {
     result: *Code_Node;
-    if rule.match_expression.extract_expressions {
+    if rule.match_expression.extracted_expressions {
         // We need to override the current format rules so that we can run the formatter on the insert expression.
         // So we back up the original rules and restore them  when we return.
         insert_formatter: Code_Formatter;
         insert_formatter.allocator = formatter.allocator;
-        insert_formatter.format_rules = create_format_rules_from_extract_expressions(*insert_formatter, rule.match_expression.extract_expressions);
+        insert_formatter.format_rules = create_format_rules_from_extract_expressions(*insert_formatter, rule.match_expression.extracted_expressions);
         result = format_code(*insert_formatter, rule.insert_expression);
         
         // TODO: Improve contextual awareness so we can provide better logs. 
         //       I would like to log the replacements for even simple formats when modifying the input code, but the result can be very spammy.
         //       And if we are replacing subexpressions in the insert expression, that should be logged differently.
         //       Perhaps we should just collect all of the subexpressions that get matched/replaced and log them at the end.
-        debug_log("Replacing subexpression (%) with (%)", sprintx(found_expression), sprintx(result));
+        debug_log("Replacing subexpression (%) with (%)", sprintx(expression), sprintx(result));
         debug_log("    Rule matched: (%) -> (%)", sprintx(rule.match_expression.root), sprintx(rule.insert_expression));
-        for rule.match_expression.extract_expressions {
-            debug_log("% -> %", it.ident.name, sprintx(it.found_expression));
+        for rule.match_expression.extracted_expressions {
+            if it.expression {
+                debug_log("% -> %", it.ident.name, sprintx(it.expression));
+            }
         }
     } else {
         result = rule.insert_expression;
@@ -675,17 +695,17 @@ create_replacement_nodes :: (formatter: *Code_Formatter, found_expression: *Code
     return result;
 }
 
-create_format_rules_from_extract_expressions :: (formatter: *Code_Formatter, extract_expressions: [] *Extract_Expression) -> [] Node_Format_Rule {
+create_format_rules_from_extract_expressions :: (formatter: *Code_Formatter, extracted_expressions: [] *Extracted_Expression) -> [] Node_Format_Rule {
     // TODO: maybe allocate rules using temp instead of node memory pool?
-    rules := NewArray(extract_expressions.count, Node_Format_Rule,, get_allocator(formatter));
-    for extract_expressions {
+    rules := NewArray(extracted_expressions.count, Node_Format_Rule,, get_allocator(formatter));
+    for extracted_expressions {
         rules[it_index] = .{
             match_expression = .{
                 // We can't use the existing identifier because it is backticked, 
                 // so we just make a new one for the match expression.
                 root = make_ident(it.name,, get_allocator(formatter)),
             },
-            insert_expression = it.found_expression,
+            insert_expression = it.expression,
         };
     }
     return rules;
@@ -1286,6 +1306,7 @@ ensure_correctness :: (node: *Code_Node) {
             This may make some long sequences of binary operators more difficult to read in the debug output, but at least it will be correct!
         */
         node.node_flags |= .IS_PARENTHESIZED;
+        
       case .PROCEDURE_HEADER;
         _node := node.(*Code_Procedure_Header);
         _node.body_or_null.header = _node;
@@ -1297,7 +1318,7 @@ generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match
     #assert filter_code != #code,null;
     
     filter_proc :: (match_expression: *Match_Expression, code: *Code_Node) -> bool { 
-        // This is a ridiculous hack in which we use temp storage to marshall a pointer to this procedure's arguments into the scope of the inserted filter code.
+        // This is a ridiculous hack in which we use temp storage to marshal a pointer to this procedure's arguments into the scope of the inserted filter code.
         // This is unfortunately required because there is not currently any mechanism in the langauge to make the procedure arguments or other local variables visible to the inserted code.
         New(*void,, temp).* = *match_expression;
         
@@ -1334,7 +1355,7 @@ generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match
             block.block_type = .IMPERATIVE;
             block.statements = statements;
 
-            // print_code(block);
+            print_code(block);
             return compiler_get_code(block);
         };
         return true;
@@ -1345,8 +1366,8 @@ generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match
 
 
 get_extracted_expression_by_name :: (match_expression: *Match_Expression, name: string) -> *Code_Node {
-    for match_expression.extract_expressions {
-        if it.name == name  return it.found_expression;
+    for match_expression.extracted_expressions {
+        if it.name == name  return it.expression;
     }
     assert(false, "Invalid identifier used in filter code: %", name);
     return null;
