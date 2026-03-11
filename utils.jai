@@ -48,6 +48,13 @@ make_procedure_call :: (procedure_expression: *Code_Node, arguments: ..Code_Argu
     return call;
 }
 
+make_block :: (statements: ..*Code_Node, info := Code_Block.{ block_type = .IMPERATIVE }) -> *Code_Block {
+    block := New(Code_Block);
+    block.* = info;
+    block.statements = array_copy(statements);
+    return block;
+}
+
 
 make_declaration :: (name: string, type_inst: *Code_Type_Instantiation = null, expression: *Code_Node = null, flags: type_of(Code_Declaration.flags) = xx 0) -> *Code_Declaration {
     declaration := New(Code_Declaration);
@@ -168,17 +175,6 @@ make_type_of :: (expression: *Code_Node) {
     return code_expression_query;
 }
 
-// make_integer_literal :: (v: u64) -> *Code_Literal {
-//     literal := New(Code_Literal);
-
-//     literal.kind          = .LITERAL;
-//     literal.value_type    = .NUMBER;
-//     literal.value_flags   = .IS_A_NUMBER;
-//     literal._u64          = v;
-
-//     return literal;
-// }
-
 make_float32_literal :: (v: float32) -> *Code_Literal {
     literal := New(Code_Literal);
     literal.value_type    = .NUMBER;
@@ -205,6 +201,23 @@ make_directive_code :: (expression: *Code_Node) -> *Code_Directive_Code {
     code := New(Code_Directive_Code);
     code.expression = expression;
     return code;
+}
+
+make_procedure_header :: (info: Code_Procedure_Header, body_block: *Code_Block = null) -> *Code_Procedure_Header {
+    header := New(Code_Procedure_Header);
+    header.* = info;
+    
+    if body_block {
+        body := New(Code_Procedure_Body);
+        body.header = header;
+        body.block  = body_block;
+        header.body_or_null = body;
+        
+        // strip any weird flags that user may have set incorrectly or copied accidentally
+        header.procedure_flags &= ~(.TYPE_ONLY);
+    }
+    
+    return header;
 }
 
 // maybe this should go in a different module, but this is where it is most useful for now, due to the amount of code node allocations we do.
@@ -329,7 +342,6 @@ make_literal_from_any :: (any: Any) -> *Code_Node {
     assert(false, "Unimplemented case in make_literal_from_any.");
     return null;
 }
-
 
 
 #scope_module 
