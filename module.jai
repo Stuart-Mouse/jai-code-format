@@ -757,7 +757,7 @@ get_type_for_node_kind :: (kind: Code_Node.Kind) -> Type {
       case .COMPOUND_DECLARATION;        type = Code_Compound_Declaration;
       case .ASM;                         type = Code_Asm;
       case .DIRECTIVE_INSERT;            type = Code_Directive_Insert;
-      case .DIRECTIVE_PLACE;             type = Code_Directive_Place;
+      case .DIRECTIVE_PLACE;             //type = Code_Directive_Place;
       case .DIRECTIVE_MODULE_PARAMETERS; type = Code_Directive_Module_Parameters;
       case .NOTE;                        type = Code_Note;
       case .DIRECTIVE_WILDCARD;          type = Code_Directive_Wildcard;
