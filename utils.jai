@@ -97,28 +97,28 @@ make_type_inst_from_ident :: (type_name: string) -> *Code_Type_Instantiation {
     return type_inst;
 }
 
-make_type_inst_fixed_array :: (array_element_type: *Code_Type_Instantiation, array_dimension: int) {
+make_type_inst_fixed_array :: (array_element_type: *Code_Type_Instantiation, array_dimension: int) -> *Code_Type_Instantiation {
     type_inst := New(Code_Type_Instantiation);
     type_inst.array_element_type = array_element_type;
     type_inst.array_dimension = array_dimension;
     return type_inst;
 }
 
-make_type_inst_array_view :: (array_element_type: *Code_Type_Instantiation) {
+make_type_inst_array_view :: (array_element_type: *Code_Type_Instantiation) -> *Code_Type_Instantiation {
     type_inst := New(Code_Type_Instantiation);
     type_inst.array_element_type = array_element_type;
     type_inst.inst_flags = .ARRAY_VIEW;
     return type_inst;
 }
 
-make_type_inst_resizable_array :: (array_element_type: *Code_Type_Instantiation) {
+make_type_inst_resizable_array :: (array_element_type: *Code_Type_Instantiation) -> *Code_Type_Instantiation {
     type_inst := New(Code_Type_Instantiation);
     type_inst.array_element_type = array_element_type;
     type_inst.inst_flags = .RESIZABLE;
     return type_inst;
 }
 
-make_type_inst_pointer_to :: (pointer_to: *Code_Type_Instantiation) {
+make_type_inst_pointer_to :: (pointer_to: *Code_Type_Instantiation) -> *Code_Type_Instantiation {
     type_inst := New(Code_Type_Instantiation);
     type_inst.pointer_to = pointer_to;
     return type_inst;
