@@ -1313,55 +1313,78 @@ ensure_correctness :: (node: *Code_Node) {
     }
 }
 
+This_Module :: #this;
 
-generate_filter_proc :: ($filter_code: Code, $scope := #caller_code) -> ((*Match_Expression, *Code_Node) -> bool) {
+#run {
+    root := compiler_get_nodes(This_Module).(*Code_Ident);
+    print_vars(root.resolved_declaration.expression.*);
+    
+}
+
+// TODO: Try to make the generated filter proc itself take a Code parameter back for the code_format_module, and then use bake_arguments to pass it in.
+// See if we can also put a decl for the filter_proc in this module's scope but have the header and body be in the user scope.
+generate_filter_proc :: ($filter_code: Code, scope := #caller_code) -> ((*Match_Expression, *Code_Node) -> bool) {
     #assert filter_code != #code,null;
     
-    filter_proc :: (match_expression: *Match_Expression, code: *Code_Node) -> bool { 
-        // This is a ridiculous hack in which we use temp storage to marshal a pointer to this procedure's arguments into the scope of the inserted filter code.
-        // This is unfortunately required because there is not currently any mechanism in the langauge to make the procedure arguments or other local variables visible to the inserted code.
-        New(*void,, temp).* = *match_expression;
+    #insert,scope(filter_code) -> Code {
+        root := compiler_get_nodes(filter_code);
+        if root == null || root.kind != .PROCEDURE_HEADER  return #code return null;
         
-        #insert,scope(filter_code) -> Code {
-            root := compiler_get_nodes(filter_code);
-            if root == null || root.kind != .PROCEDURE_HEADER  return #code,null;
-            
-            header := root.(*Code_Procedure_Header);
-            assert(header.procedure_flags & .QUICK == .QUICK);
-            
-            statements: [..] *Code_Node;
-            statements.allocator = temp;
-            array_reserve(*statements, header.arguments.count + 3);
-            
-            array_add(*statements, compiler_get_nodes(#code __get__ :: (#import "Code_Format").get_extracted_expression_by_name));
-            array_add(*statements, compiler_get_nodes(#code match_expression := (context.temporary_storage.data + context.temporary_storage.current_page_bytes_occupied - size_of(*void)).(***Match_Expression).*.*));
-            
-            match_expression_ident := make_ident("match_expression");
-            
-            for header.arguments {
-                declaration := New(Code_Declaration);
-                declaration.name = it.name;
-                declaration.expression = make_procedure_call("__get__", 
-                    .{ match_expression_ident, null },
-                    .{ make_string_literal(it.name),   null },
-                );
-                array_add(*statements, declaration);
+        header := root.(*Code_Procedure_Header);
+        assert(header.procedure_flags & .QUICK == .QUICK);
+        
+        statements: [..] *Code_Node;
+        statements.allocator = temp;
+        array_reserve(*statements, header.arguments.count + 3);
+        
+        // TODO: Make this not rely on this hacky import, somehow.
+        array_add(*statements, compiler_get_nodes(#code __get__ :: (#import "Code_Format").get_extracted_expression_by_name));
+        // array_add(*statements, make_declaration("__get__", expression = compiler_get_nodes(get_extracted_expression_by_name), .IS_CONSTANT));
+        
+        match_expression_ident := make_ident("match_expression");
+        
+        for header.arguments {
+            expression := make_procedure_call("__get__", 
+                .{ match_expression_ident, null },
+                .{ make_string_literal(it.name),   null },
+            );
+            declaration := make_declaration(it.name, null, expression);
+            array_add(*statements, declaration);
+        }
+        
+        {
+            block := header.body_or_null.block;
+            return_statement := block.statements[block.statements.count-1].(*Code_Return);
+            if return_statement.kind == .RETURN {
+                return_statement.return_flags &= ~.AUTO_INSERTED_FOR_QUICK_LAMBDA;
             }
-            
-            remove_implicit_return_from_quick_lambda_body_block(header.body_or_null.block);
-            array_add(*statements, header.body_or_null.block);
-            
-            block := New(Code_Block);
-            block.block_type = .IMPERATIVE;
-            block.statements = statements;
-
-            print_code(block);
-            return compiler_get_code(block);
-        };
-        return true;
+        }
+        
+        array_add(*statements, header.body_or_null.block);
+        
+        block := New(Code_Block);
+        block.block_type = .IMPERATIVE;
+        block.statements = statements;
+        
+        filter_proc_header := compiler_get_nodes(#code
+            (match_expression: *Match_Expression, code: *Code_Node) -> bool { }
+        ).(*Code_Procedure_Header);
+        
+        filter_proc_header.body_or_null = New(Code_Procedure_Body);
+        filter_proc_header.body_or_null.header = filter_proc_header;
+        filter_proc_header.body_or_null.block = block;
+        
+        filter_proc_decl := make_declaration("filter_proc", expression = filter_proc_header);
+        
+        return_statement := New(Code_Return);
+        return_statement.arguments_unsorted = NewArray(1, Code_Argument);
+        return_statement.arguments_unsorted[0].expression = make_ident("filter_proc");
+        // return_statement.arguments_unsorted[0].expression = filter_proc_header;
+        
+        result := make_block(filter_proc_decl, return_statement);
+        print_code(result);
+        return compiler_get_code(result);
     };
-    
-    return filter_proc;
 }
 
 
@@ -1392,3 +1415,4 @@ get_extracted_expression_by_name :: (match_expression: *Match_Expression, name: 
 
 
 
+#import "Print_Vars";
