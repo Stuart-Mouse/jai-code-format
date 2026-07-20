@@ -97,7 +97,7 @@
     in a perfect world we would be able to just let the user pass a polymorphic quick lambda and automatically generate the calling code to pass the extract expression nodes by name
 */
 
-DEBUG :: false;
+#module_parameters()(DEBUG := false);
 
 debug_log :: (format: string, args: ..Any) {
     #if DEBUG  log(format, ..args);
@@ -181,6 +181,7 @@ format_code :: ($code: Code, $format_rules: ..Code_Format_Rule, $code_to_copy_sc
     formatter.allocator = allocator;
     
     formatter.format_rules = NewArray(format_rules.count, Node_Format_Rule,, get_allocator(*formatter));
+    // TODO: Try and make this into a code insert rather than a string insert.
     #insert -> string {
         builder: String_Builder;
         for 0..format_rules.count-1 {
@@ -1315,78 +1316,103 @@ ensure_correctness :: (node: *Code_Node) {
 
 This_Module :: #this;
 
-#run {
-    root := compiler_get_nodes(This_Module).(*Code_Ident);
-    print_vars(root.resolved_declaration.expression.*);
+/*
+    NOTES:
+    - Using insert,scope() inside a struct appears to cause a circular dependency error of some sort. Need to test this with a more simple case to see what other factors are involved.
+    - Using #import,string inside a procedure appears to result in the compiler trying to just do a regular import rather than importing the string as a module.
     
-}
+    
+    TODO:
+    after testing a simpler example, it seems that the dummy struct idea should actually work out, I will just have to pass only the types/procedures I absolutely need.
+    The circular dependency thing was probably due to trying to pass the whole module type in to the bake_arguments or something...
+    
+    If that doesnt' work another possible trick we could try is using dynamic specialize.
+    
+    I think there may also be something to the idea of using Types to return polymorphic data back from a procedure like generate_filter_proc.
+    And then we could do some kind of bake on the polymorphic procedure inside the type once we are back in the calling scope...
+    
+    Option number 3 is that we add a helper proc inside generate_filter_proc that performs the first step of doing the Code insert,
+    then by returning from that helper procedure, we are able to step back into another scope that has access to the local constants and make use of those again.
+    
+    Eureka, we did it! And now I am exhausted.
+    But I still wanna know why we got that compiler circular dependency error thing when trying to just insert,scope into the dummy struct directly, without using the helper proc.
+    It's strange that the minimal example works, but something about this more complex scenario was causing the compiler to give up.
+*/
 
-// TODO: Try to make the generated filter proc itself take a Code parameter back for the code_format_module, and then use bake_arguments to pass it in.
-// See if we can also put a decl for the filter_proc in this module's scope but have the header and body be in the user scope.
 generate_filter_proc :: ($filter_code: Code, scope := #caller_code) -> ((*Match_Expression, *Code_Node) -> bool) {
     #assert filter_code != #code,null;
     
-    #insert,scope(filter_code) -> Code {
-        root := compiler_get_nodes(filter_code);
-        if root == null || root.kind != .PROCEDURE_HEADER  return #code return null;
-        
-        header := root.(*Code_Procedure_Header);
-        assert(header.procedure_flags & .QUICK == .QUICK);
-        
-        statements: [..] *Code_Node;
-        statements.allocator = temp;
-        array_reserve(*statements, header.arguments.count + 3);
-        
-        // TODO: Make this not rely on this hacky import, somehow.
-        array_add(*statements, compiler_get_nodes(#code __get__ :: (#import "Code_Format").get_extracted_expression_by_name));
-        // array_add(*statements, make_declaration("__get__", expression = compiler_get_nodes(get_extracted_expression_by_name), .IS_CONSTANT));
-        
-        match_expression_ident := make_ident("match_expression");
-        
-        for header.arguments {
-            expression := make_procedure_call("__get__", 
-                .{ match_expression_ident, null },
-                .{ make_string_literal(it.name),   null },
-            );
-            declaration := make_declaration(it.name, null, expression);
-            array_add(*statements, declaration);
-        }
-        
-        {
-            block := header.body_or_null.block;
-            return_statement := block.statements[block.statements.count-1].(*Code_Return);
-            if return_statement.kind == .RETURN {
-                return_statement.return_flags &= ~.AUTO_INSERTED_FOR_QUICK_LAMBDA;
-            }
-        }
-        
-        array_add(*statements, header.body_or_null.block);
-        
-        block := New(Code_Block);
-        block.block_type = .IMPERATIVE;
-        block.statements = statements;
-        
-        filter_proc_header := compiler_get_nodes(#code
-            (match_expression: *Match_Expression, code: *Code_Node) -> bool { }
-        ).(*Code_Procedure_Header);
-        
-        filter_proc_header.body_or_null = New(Code_Procedure_Body);
-        filter_proc_header.body_or_null.header = filter_proc_header;
-        filter_proc_header.body_or_null.block = block;
-        
-        filter_proc_decl := make_declaration("filter_proc", expression = filter_proc_header);
-        
-        return_statement := New(Code_Return);
-        return_statement.arguments_unsorted = NewArray(1, Code_Argument);
-        return_statement.arguments_unsorted[0].expression = make_ident("filter_proc");
-        // return_statement.arguments_unsorted[0].expression = filter_proc_header;
-        
-        result := make_block(filter_proc_decl, return_statement);
-        print_code(result);
-        return compiler_get_code(result);
+    // By returning a Type here, we can effectively return a polymorphic procedure from a #run. (And that procedure has the scope from filter_code.)
+    // This allows us to then specialize the procedure below and insert things that we need from this module's scope.
+    // This would not be necessary if not for the scoping issues currently presetn when inserting procedures and structs.
+    using #run -> Type {
+        #insert,scope(filter_code) #run format_fitler_proc_code(filter_code);
     };
+    
+    #if #exists(filter_proc) {
+        return #bake_arguments filter_proc(__get_parameter__ = get_extracted_expression_by_name, Match_Expression = Match_Expression);
+    } else {
+        return null;
+    }
 }
 
+format_fitler_proc_code :: (code: Code) -> Code #compile_time {
+    root := compiler_get_nodes(code);
+    if root == null || root.kind != .PROCEDURE_HEADER {
+        return #code return struct {};
+    }
+    
+    filter_proc_decl := compiler_get_nodes(#code
+        filter_proc :: ($__get_parameter__: $T, $Match_Expression: Type, match_expression: *Match_Expression, code: *Code_Node) -> bool { }
+    ).(*Code_Declaration);
+    
+    filter_proc_header := filter_proc_decl.expression.(*Code_Procedure_Header);
+    filter_proc_header.body_or_null = New(Code_Procedure_Body);
+    filter_proc_header.body_or_null.header = filter_proc_header;
+    
+    lambda_header := root.(*Code_Procedure_Header);
+    assert(lambda_header.procedure_flags & .QUICK == .QUICK);
+    
+    statements: [..] *Code_Node;
+    statements.allocator = temp;
+    array_reserve(*statements, lambda_header.arguments.count + 3);
+    
+    match_expression_ident := make_ident("match_expression");
+    
+    for lambda_header.arguments {
+        expression := make_procedure_call("__get_parameter__", 
+            .{ match_expression_ident, null },
+            .{ make_string_literal(it.name),   null },
+        );
+        declaration := make_declaration(it.name, null, expression);
+        array_add(*statements, declaration);
+    }
+    
+    lambda_block := lambda_header.body_or_null.block;
+    {
+        return_statement := lambda_block.statements[lambda_block.statements.count-1].(*Code_Return);
+        if return_statement.kind == .RETURN {
+            return_statement.return_flags &= ~.AUTO_INSERTED_FOR_QUICK_LAMBDA;
+        }
+    }
+    
+    array_add(*statements, lambda_block);
+    
+    filter_block := New(Code_Block);
+    filter_block.block_type = .IMPERATIVE;
+    filter_block.statements = statements;
+    
+    filter_proc_header.body_or_null.block = filter_block;
+    
+    return_statement := compiler_get_nodes(#code return struct #type_info_none { placeholder: void; }).(*Code_Return);
+    struct_def := return_statement.arguments_unsorted[0].expression.(*Code_Struct);
+    assert(struct_def.kind == .STRUCT);
+    assert(struct_def.block.statements.count == 1);
+    struct_def.block.statements[0] = filter_proc_decl;
+    
+    print_code(return_statement);
+    return compiler_get_code(return_statement);
+}
 
 get_extracted_expression_by_name :: (match_expression: *Match_Expression, name: string) -> *Code_Node {
     for match_expression.extracted_expressions {

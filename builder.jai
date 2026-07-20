@@ -12,7 +12,7 @@ init :: (builder: *Code_Builder, allocator := temp) {
 }
 
 deinit :: (builder: *Code_Builder) {
-    fini(*builder.memory_pool);
+    // fini(*builder.memory_pool);
 }
 
 get_allocator :: (builder: *Code_Builder) -> Allocator {
