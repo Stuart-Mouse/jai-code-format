@@ -248,7 +248,7 @@ main :: () {
     */ 
     #insert #run,stallable 
         format_code(#code print_eval(1 + 2 + 3),
-            { (#code `a + `b), (#code b - a), true }, 
+            { (#code `a + `b), (#code b - a), #code,null }, 
         );
     
     
