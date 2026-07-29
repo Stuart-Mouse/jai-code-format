@@ -18,8 +18,8 @@ main :: () {
     print("\nSimple Substitution:\n");
     #insert #run,stallable 
         format_code(#code print_eval(a + b),
-            { (#code a), 3, true },
-            { (#code b), 5, true },
+            { (#code a), 3, #code,null },
+            { (#code b), 5, #code,null },
         );
     
     {
@@ -37,7 +37,7 @@ main :: () {
         {
             sum_floats :: #insert #run,stallable 
                 format_code(code_of(sum), 
-                    { int, float, true }, 
+                    { int, float, #code,null }, 
                 );
             
             numbers := float.[ 1, 2.5, 3.25 ];
@@ -58,14 +58,14 @@ main :: () {
         print("\nWildcards Example 1:\n");
         #insert #run,stallable 
             format_code(#code print_eval(3 + 7),
-                { (#code `a + `b), (#code b - a), true }
+                { (#code `a + `b), (#code b - a), #code,null }
             );
         
         print("\nNegative Sum:\n");
         {
             negative_sum :: #insert #run,stallable 
                 format_code(code_of(sum), 
-                    { (#code `a += `b), (#code a -= b), true }
+                    { (#code `a += `b), (#code a -= b), #code,null }
                 );
             
             numbers := int.[ 1, 2, 3, 4, 5 ];
@@ -88,7 +88,7 @@ main :: () {
                 print_eval(1 + 2);
                 print_eval(2 + 2);
             },
-            { (#code `a + 2), (#code a + 3), true }, 
+            { (#code `a + 2), (#code a + 3), #code,null }, 
         );
     
     print("\nMatching Binary Minus:\n");
@@ -97,7 +97,7 @@ main :: () {
                 print_eval(6 + 1);
                 print_eval(6 - 1);
             },
-            { (#code `a - `b), (#code `a - (`b * 2)), true }, 
+            { (#code `a - `b), (#code `a - (`b * 2)), #code,null }, 
         );
     
     print("\nMatching Unary Minus:\n");
@@ -107,7 +107,7 @@ main :: () {
                 print_eval(+value);
                 print_eval(-value);
             },
-            { (#code -`a), (#code ~`a), true }, 
+            { (#code -`a), (#code ~`a), #code,null }, 
         );
     
     
@@ -123,7 +123,7 @@ main :: () {
                 print_eval(type_of(as_float));
                 print_eval(type_of(as_u16));
             },
-            { (#code cast(float) `a), (#code cast(float64) `a), true }, 
+            { (#code cast(float) `a), (#code cast(float64) `a), #code,null }, 
         );
     
     
@@ -136,8 +136,7 @@ main :: () {
         Inside the filter expression the wildcard identifiers are of type `*Code_Node` so you can recursively inspect them and use whatever criteria you wish to determine if the expression is a match.
         
         Behind the scenes, we do some sort of kooky stuff to make this nice syntax work out, but the end result is quite nice.
-        The current solution does have one particularly gross hack in it though, so it's likely I'll change how this feature works in the near future.
-        In the mean time, the body of the filter expression has access to the local scope, but this may have to change!
+        The filter proc has access to local scope, as well as a set of predefined helper functions.
     */
     
     // Test filter expressions
@@ -207,7 +206,7 @@ main :: () {
     }
     #if false {
         // An example of where this could be useful is if you want to do something like the following, to dynamically determine the float rounding mode based on some context member.
-        // Using a simple formatting rule we can replace every float-to-int cast with a 
+        // Using a simple formatting rule we can replace every float-to-int cast with this procedure.
         float_to_int :: (float_value: $Float_Type, $Int_Type: Type, rounding_mode := context.float_rounding_mode) -> Int_Type #modify {
             return Float_Type.(*Type_Info).type == .FLOAT, "Float_Type is not a float type.";
         } {
@@ -260,64 +259,6 @@ main :: () {
     log("%", is_integer(root));
 }
 
-
-// is_integer_type :: (code: *Code_Node) -> bool {
-//     log("is_integer_type, code.kind: %", code.kind);
-//     if code.kind == {
-//       case .TYPE_INSTANTIATION;
-//         type_inst := code.(*Code_Type_Instantiation).result;
-//         return type_inst.result != null && type_inst.result.type == .INTEGER;
-        
-//       case .IDENT;
-//         ident := code.(*Code_Ident);
-//         if ident.resolved_declaration == null  return false;
-        
-//         if ident.resolved_declaration.type == null  return false;
-//         return ident.resolved_declaration.type.type == .TYPE
-//     }
-//     return false;
-// }
-
-is_cast :: (code: *Code_Node, to: Type, from: Type) -> bool {
-    if code.kind != .CAST  return false;
-    using code_cast := code.(*Code_Cast);
-    
-    if target_type == null || target_type.result != xx to    return false;
-    if expression  == null || expression.type    != xx from  return false;
-    
-    return true;
-}
-
-is_cast :: (code: *Code_Node, to: Type_Info_Tag, from: Type_Info_Tag) -> bool {
-    if code.kind != .CAST  return false;
-    using code_cast := code.(*Code_Cast);
-    
-    if target_type == null 
-    || target_type.result == null
-    || target_type.result.type != to  return false;
-    
-    if expression == null 
-    || expression.type == null
-    || expression.type.type != from  return false;
-    
-    return true;
-}
-
-// TODO: may need extra checks for literals if they are not always assigned a type
-is_integer :: (code: *Code_Node) -> bool {
-    return code.type != null && code.type.type == .INTEGER;
-}
-
-// TODO: may need extra checks for literals if they are not always assigned a type
-is_float :: (code: *Code_Node) -> bool {
-    return code.type != null && code.type.type == .FLOAT;
-}
-
-// NOTE: If the node is not an identifier, we just return false.
-ident_begins_with :: (code: *Code_Node, prefix: string) -> bool {
-    return code.kind == .IDENT && begins_with(code.(*Code_Ident).name, prefix);
-}
-
 echo :: (value: $T) -> T {
     print("%\n", value);
     return value;
@@ -345,8 +286,6 @@ print_eval :: ($code: Code) #expand {
     Then printing result will yeild: `3 - 2 - 1` because Program_Print does not actually consider operator precedence in its output.
     I think that, for the sake of correctness, Program_Print should check if the RHS of a binary operator is also a binary operator, compare precedence, and inject additional parentheses if they are needed.
     Otherwise any user who wants to debug manually constructed code nodes using program_print will have to manually track operator precedence and set the .IS_PARENTHESIZED flag himself.
-    
-    
 */
 
 // #run,stallable {

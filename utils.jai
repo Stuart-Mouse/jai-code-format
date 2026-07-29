@@ -344,6 +344,79 @@ make_literal_from_any :: (any: Any) -> *Code_Node {
 }
 
 
+
+
+
+
+
+
+// is_integer_type :: (code: *Code_Node) -> bool {
+//     log("is_integer_type, code.kind: %", code.kind);
+//     if code.kind == {
+//       case .TYPE_INSTANTIATION;
+//         type_inst := code.(*Code_Type_Instantiation).result;
+//         return type_inst.result != null && type_inst.result.type == .INTEGER;
+        
+//       case .IDENT;
+//         ident := code.(*Code_Ident);
+//         if ident.resolved_declaration == null  return false;
+        
+//         if ident.resolved_declaration.type == null  return false;
+//         return ident.resolved_declaration.type.type == .TYPE
+//     }
+//     return false;
+// }
+
+is_cast :: (code: *Code_Node, to: Type, from: Type) -> bool {
+    if code.kind != .CAST  return false;
+    using code_cast := code.(*Code_Cast);
+    
+    if target_type == null || target_type.result != xx to    return false;
+    if expression  == null || expression.type    != xx from  return false;
+    
+    return true;
+}
+
+is_cast :: (code: *Code_Node, to: Type_Info_Tag, from: Type_Info_Tag) -> bool {
+    if code.kind != .CAST  return false;
+    using code_cast := code.(*Code_Cast);
+    
+    if target_type == null 
+    || target_type.result == null
+    || target_type.result.type != to  return false;
+    
+    if expression == null 
+    || expression.type == null
+    || expression.type.type != from  return false;
+    
+    return true;
+}
+
+// TODO: may need extra checks for literals if they are not always assigned a type
+is_integer :: (code: *Code_Node) -> bool {
+    return code.type != null && code.type.type == .INTEGER;
+}
+
+// TODO: may need extra checks for literals if they are not always assigned a type
+is_float :: (code: *Code_Node) -> bool {
+    return code.type != null && code.type.type == .FLOAT;
+}
+
+// NOTE: If the node is not an identifier, we just return false.
+ident_begins_with :: (code: *Code_Node, prefix: string) -> bool {
+    return code.kind == .IDENT && begins_with(code.(*Code_Ident).name, prefix);
+}
+
+
+
+
+
+
+
+
+
+
+
 #scope_module 
 
 get_integer_value_as_s64 :: (integer_info: *Type_Info_Integer, value_pointer: *void) -> s64 {
