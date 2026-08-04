@@ -6,27 +6,9 @@
     and then format_code will search for those identifiers and replace then with the desired replacement expressions.
     
     
-    TODO: in the future, we should be able to do things like provide a search expression `a + b`
-    and then replace all subexpressions that match this form with some replacement expression, which may use the same subexpressions from the original expression.
-    For example:
-    
-    output := format_code(#code sin(a + (b * d)), { #code `x + `y, #code x - y });
-    print_expression(output); // prints `sin(a - (b * d))`
-    
-    1. walk input search expressions to replace the backticked identifiers with Extract_Expressioes
-    2. add separate logic in format_code for matching rather than formatting (maybe this should be its own procedure and we just interleave as necessary)
-    3. run format_code on the insert expression to poke back in the extracted subexpressions
-    
-    So when we perform the match, we grab subexpression `a` as x and `(b * d)` as y.
-    And in the replacement code we substitute `a` and `(b * d)` back in.
-    Maybe we also would need some parameter to control whether this reformat occurs or not. Or perhaps we can mix and match by using backticked identifers to indicate that the resubsitition should occur for that particular identifier.
-    
     TODO: we should design this to where formats can be done recursively, and we can specify the form of subexpressions to extract, somewhat like a where clause on a sql subquery
     maybe eventually I will even add some metaprogram stuff to transform a query DSL into a set of format rules
     
-    TODO: allow user to pass a polymorphic procedure or quick lambda for the filtering function / "where clause"
-          all arguments will be of type *Code_Node, 
-          
     TODO: we could use `_  to indicate a wildcard that we don't actually want to extract.
     
     TODO: consider using ..`a for situations where we specifically want to extract a variable number of expressions into a wildcard, e.g. procedure arguments and compound declarations
@@ -37,7 +19,7 @@
     TODO: we need to actually copy every single AST node we modify for our output, so that we don't modify the source AST 
           (otherwise, we would invalidate any extracted expressions!)
     
-    TODO: once we have the more dynamic version working with exopression extracting and such, we could also create baked formatter procedures using code generation.
+    TODO: once we have the more dynamic version working with expression extracting and such, we could also create baked formatter procedures using code generation.
           then we have our fun little DSL that compiles down into a more efficient procedure that does only our specific code transformation
     
     specialized_formatter := create_formatter("replace (`c * `x) where (is_literal(`c, .NUMBER) && is_identifier(`x)) with (x / sqrt(c)");
@@ -81,20 +63,34 @@
     replace (..left: type = ..right)
     
     
-    TODO: create a code builder
-        append statements within block, open block, close block etc.
-    
     TODO: create procedure to format the same code with an array of insert expresisons
         this can probably just be part of the code builder
+        create_code_stamp(*Code_Node)
+            find extract expressions as we do for match_expression, 
+            walk nodes and copy into sequential memory, in a sort of binary blob
+                convert node pointers into offsets
+                make note of offsets of nodes we want to replace, and offsets of the pointers to those nodes
+            when we stamp code, just copy the entire binary blob, and then walk over the index of pointers that need to be fixed up
+                for any substitutions, we just overwrite the pointers with the new values
+    
+    // This structure could be generalized to apply to all kinds of data, really. 
+    // I think I eventually want to implement some similar functionality inot the Data_Packer as well...
+    Code_Stamp :: struct {
+        source_root:    *Code_Node;
+        stamp_data:     [] u8;
+        
+        // an array of indices to where pointers were in the stamp data before we turned all pointers into relative offset
+        pointer_locations: [..] u32;
+        
+        // When walking pointer_locations to fix up pointers, if points_to == offset, then we write value instead of doing ususal adjustment
+        pointer_substitutions: [..] struct {
+            offset: u32;
+            value:  *void;
+        }
+    }
     
     TODO: before adding more stuff for formatting/replacing we should make a functional and useful code_search
     
-    code search will do largely the same thing as format_code, 
-    except it will collect all of the matched expressions into an array
-    and we will need to implement the filter lambda stuff
-    
-    for now I am doing the basic version of the filter which is just to give the match expression and match code as-is
-    in a perfect world we would be able to just let the user pass a polymorphic quick lambda and automatically generate the calling code to pass the extract expression nodes by name
 */
 
 #module_parameters()(DEBUG := false);
@@ -106,7 +102,16 @@ debug_log :: (format: string, args: ..Any) {
 Code_Formatter :: struct {
     // IMPORTANT NOTE: we assume that the allocator is some kind of pool and that all nodes will be freed at once.
     allocator:      Allocator;
+    
     format_rules:   [] Node_Format_Rule;
+    
+    // Mode :: enum { FORMAT; SEARCH; };
+    // union mode: Mode {
+    //     .FORMAT,, format_rules:   [] Node_Format_Rule;
+    //     .SEARCH,, match_rules: struct {
+    //         match_expression: Match_Expression; // TODO: support multiple match expressions at the same time
+    //     }
+    // }
 }
 
 Node_Format_Rule :: struct {
@@ -115,63 +120,94 @@ Node_Format_Rule :: struct {
 }
 
 Match_Expression :: struct {
-    root:                   *Code_Node;
-    extracted_expressions:  [..] *Extracted_Expression;
-    filter:                 (*Match_Expression, *Code_Node) -> bool;
+    expression:     *Code_Node;
+    wildcards:      [] *Match_Wildcard;
+    filter:         Filter_Proc;
+    
+    // NOTE: matched array is not filled when performing a format, because the expression pointers would be invalidated by any AST modifications.
+    matched: [..] Matched;
+    Matched :: struct {
+        expression:     *Code_Node;
+        wildcards:      [] Filled_Match_Wildcard;
+    };
 }
 
-Extracted_Expression :: struct {
-    using #as ident:    Code_Ident;
-    expression:         *Code_Node;
-    // expressions:  [] *Code_Node; // For cases like compound declarations?
+// Match_Wildcard represents a wildcard subexpression in the Match_Expression.
+// When we create a Node_Format_Rule, we do a pre-pass over the given match expression to identify all of the extract expressions it contains.
+// Then as we walk_nodes to match_code, we try_match_wildcard and fill in Match_Wildcard.pending_match member if applicable.
+// Due to the structure of match_code, we will never declare a match without filling all of the wildcards in a Match_Expression.
+Match_Wildcard :: struct {
+    using #as ident:    Code_Ident; // bacticked Code_Ident from Match_Expression.root subexprs
+    pending_match:      *Code_Node; // holds the current (pending) match that will be copied to Match_Expression.Matched.wildcards once a full match is found
 }
+
+Filled_Match_Wildcard :: struct {
+    name:       string;
+    expression: *Code_Node;
+}
+
+
+// TODO: perhaps we can just add additional format rules that specify how to match a given Extracted_Expression, thereby chaining sub-rules.
+//       maybe by using an anonymous struct literal to pass all the rule parameters to format_code we could make the interface a bit more flexible (may also remove the need to use #code so much...)
+//       This will require a bit more thinking though...
 
 Code_Format_Rule :: struct {
-    match_expression:   Code;
-    insert_expression:  Code;
-    filter:             Code;
+    match, insert, filter: Code;
 }
 
-create_node_format_rule :: (formatter: *Code_Formatter, $code_format_rule: Code_Format_Rule, $code_to_copy_scope_from: Code) -> Node_Format_Rule {
+/*
+    In order to create a Node_Format_Rule from a Code_Format_Rule, we have to do a nontrivial amount of work.
+    First, we have to walk the match expression and collect all of the named subexpressions that we want to extract. (These are the backticked identifiers.)
+    Secondly, we have to generate the filter proc from the given filter code.
+    Because of the code generation involved, we have to do a value back on code_format_rule.
+    This is why init_extracted_expressions is factored out to its own separate helper procedure; we want to minimize the additional work the compiler has to do each time this macro is called.
+*/
+create_node_format_rule :: (formatter: *Code_Formatter, $code_format_rule: Code_Format_Rule) -> Node_Format_Rule #expand {
     node_rule: Node_Format_Rule;
     
-    match_expression_walk_proc :: (formatter: *Code_Formatter, code: *Code_Node, match_expression: *Match_Expression) -> Walk_Nodes_Return_Code, *Code_Node {
-        code_ident := is_backticked_identifier(code);
-        if code_ident {
-            ext_exp := New(Extracted_Expression,, get_allocator(formatter));
-            ext_exp.ident = code_ident;
-            array_add(*match_expression.extracted_expressions, ext_exp);
-            return .RETURN, ext_exp;
-        }
-        return .CONTINUE, code;
-    };
+    node_rule.match_expression = create_match_expression(formatter, compiler_get_nodes(code_format_rule.match));
     
-    // make extracted expression for root
-    {
-        ext_exp := New(Extracted_Expression,, get_allocator(formatter));
-        ext_exp.ident = make_ident("root", flags = .HAS_SCOPE_MODIFIER,, get_allocator(formatter));
-        array_add(*node_rule.match_expression.extracted_expressions, ext_exp);
-    }
+    // TODO: Create a Code_Stamp for the insert expression, once such a thing exists.
+    node_rule.insert_expression = compiler_get_nodes(code_format_rule.insert);
     
-    node_rule.match_expression.root = compiler_get_nodes(code_format_rule.match_expression);
-    node_rule.match_expression.root = walk_nodes(
-        match_expression_walk_proc, 
-        formatter, 
-        node_rule.match_expression.root, 
-        *node_rule.match_expression,
-        modify_in_place = true,
-    );
-    
-    // TODO: We should experiment later with preprocessing the insert expression to optimize subexpression re-insertions.
-    node_rule.insert_expression = compiler_get_nodes(code_format_rule.insert_expression);
-    
-    // NOTE: The call to generate_filter_proc is the reason why code_format_rule must be constant, since we 
+    // NOTE: This call to generate_filter_proc is the reason why code_format_rule must be constant.
     node_rule.match_expression.filter = generate_filter_proc(#run code_format_rule.filter);
     
     return node_rule;
 }
 
-format_code :: ($code: Code, $format_rules: ..Code_Format_Rule, $code_to_copy_scope_from := #caller_code, $location := #caller_location) -> Code {
+create_match_expression :: (formatter: *Code_Formatter, expression: *Code_Node) -> Match_Expression {
+    match_expression: Match_Expression;
+    match_expression.matched.allocator = get_allocator(formatter);
+    
+    wildcards: [..] *Match_Wildcard;
+    wildcards.allocator = get_allocator(formatter);
+    
+    match_expression_walk_proc :: (formatter: *Code_Formatter, code: *Code_Node, wildcards: *[..] *Match_Wildcard) -> Code_Walk_Return_Code, *Code_Node {
+        code_ident := is_backticked_identifier(code);
+        if code_ident {
+            wildcard := New(Match_Wildcard,, get_allocator(formatter));
+            wildcard.ident = code_ident.*;
+            array_add(wildcards, wildcard);
+            return .RETURN, wildcard;
+        }
+        return .CONTINUE, code;
+    };
+    
+    match_expression.expression = walk_nodes(
+        formatter       = formatter, 
+        code            = expression, 
+        user_data       = *wildcards,
+        on_entry        = xx match_expression_walk_proc,
+        write_mode      = .MODIFY_IN_PLACE,
+    );
+    
+    match_expression.wildcards = wildcards;
+    
+    return match_expression;
+}
+
+format_code :: ($code: Code, $format_rules: ..Code_Format_Rule, $code_to_copy_scope_from := #caller_code, $location := #caller_location) -> Code #compile_time {
     memory_pool: Flat_Pool;
     defer fini(*memory_pool);
     allocator := Allocator.{ flat_pool_allocator_proc, *memory_pool };
@@ -184,24 +220,37 @@ format_code :: ($code: Code, $format_rules: ..Code_Format_Rule, $code_to_copy_sc
     #insert -> string {
         builder: String_Builder;
         for 0..format_rules.count-1 {
-            print(*builder, "formatter.format_rules[%1] = create_node_format_rule(*formatter, format_rules[%1], code_to_copy_scope_from);", it);
+            print(*builder, "formatter.format_rules[%1] = create_node_format_rule(*formatter, format_rules[%1]);", it);
         }
         return builder_to_string(*builder);
     }
     
     nodes := compiler_get_nodes(code);
-    nodes = format_code(*formatter, nodes);
+    result := format_code(*formatter, nodes);
     
     #if DEBUG {
-        print("%:%,%: format_code returned:\n\n", location.fully_pathed_filename, location.line_number, location.character_number);
+        print("%:%,%: format_code input:\n\n", location.fully_pathed_filename, location.line_number, location.character_number);
         write_string(sprintx(nodes,, temp));
+        write_string("\n\n");
+        
+        print("%:%,%: format_code returned:\n\n", location.fully_pathed_filename, location.line_number, location.character_number);
+        write_string(sprintx(result,, temp));
         write_string("\n\n");
     }
     
-    return compiler_get_code(nodes, code_to_copy_scope_from);
+    for rule, rule_index: formatter.format_rules {
+        if rule.match_expression.matched.count > 0 {
+            log("Matches found for rule %:", rule_index);
+            for rule.match_expression.matched {
+                log("% (%)", it.expression, it.expression.kind);
+            }
+        }
+    }
+    
+    return compiler_get_code(result, code_to_copy_scope_from);
 }
 
-format_code_to_nodes :: ($code: Code, format_rules: ..Node_Format_Rule, allocator: Allocator, $location := #caller_location) -> *Code_Node {
+format_code_to_nodes :: ($code: Code, format_rules: ..Node_Format_Rule, allocator: Allocator, $location := #caller_location) -> *Code_Node #compile_time {
     formatter: Code_Formatter;
     formatter.allocator    = allocator;
     formatter.format_rules = format_rules;
@@ -218,41 +267,52 @@ format_code_to_nodes :: ($code: Code, format_rules: ..Node_Format_Rule, allocato
     return nodes;
 }
 
-format_code :: (formatter: *Code_Formatter, code: *Code_Node) -> *Code_Node {
+format_code :: (formatter: *Code_Formatter, code: *Code_Node) -> *Code_Node #compile_time {
     return walk_nodes(
-        proc      = try_getting_replacement_nodes, 
-        formatter = formatter, 
-        code      = code,
-        user_data = null,
-        modify_in_place = false,
-        run_proc_on_return = true,
+        formatter       = formatter, 
+        code            = code,
+        user_data       = null,
+        on_return       = xx try_getting_replacement_nodes, 
+        write_mode      = .COPY_ON_WRITE,
     );
 }
 
-try_getting_replacement_nodes :: (formatter: *Code_Formatter, code: *Code_Node, _: *void) -> Walk_Nodes_Return_Code, *Code_Node {
+try_getting_replacement_nodes :: (formatter: *Code_Formatter, code: *Code_Node, _: *void) -> Code_Walk_Return_Code, *Code_Node {
+    // assert(formatter.mode == .FORMAT);
+    
     for *rule: formatter.format_rules {
-        if match_code(formatter, *rule.match_expression, code, rule.match_expression.root) {
-            // set the root extracted expression before running the filter proc
-            if rule.match_expression.extracted_expressions {
-                rule.match_expression.extracted_expressions[0].expression = code;
-            }
-            
+        if match_code(formatter, *rule.match_expression, code, rule.match_expression.expression) {
             filter := rule.match_expression.filter;
             if filter && !filter(*rule.match_expression, code) {
                 return .CONTINUE, code;
             }
-            return .RETURN, create_replacement_nodes(formatter, code, rule);
+            
+            // TODO: filter_proc should probably take a Match_Expression.Matched rather than a Match_Expression, so that we expose as little as possible of internals
+            // TODO: all the below code is commented out because it cannot work with how walk_nodes copies nodes onto the stack to modify them before determining whether to overwrite at the end.
+            //       I am tired as of writing this and don't fully understand the entire problem yet, but basically I think we will only be able to collect matched expressions in this manner when we consider the walked nodes immutable and refrain from doing any of the funky conditional copy shenanigans.
+            //       Also, it just doesnt' really make sense to collect matched expressions in this manner when we are modifying the ast as we walk it, especially since we may be evaluating multiple rules on the same pass over the AST.
+            //       So if we want to log modified subexpressions, we will have to keep doing it at the moment that we perform the modification, which is probably fine.
+            // matched: Match_Expression.Matched;
+            // matched.expression = code;
+            // matched.wildcards  = NewArray(rule.match_expression.wildcards.count, Filled_Match_Wildcard);
+            // for rule.match_expression.wildcards {
+            //     matched.wildcards[it_index] = .{ it.name, it.pending_match};
+            // }
+            // array_add(*rule.match_expression.matched, matched);
+            
+            replacement_nodes := create_replacement_nodes(formatter, code, rule);
+            return .RETURN, replacement_nodes;
         }
     }
     return .CONTINUE, code;
 }
 
 match_code :: (formatter: *Code_Formatter, match_expression: *Match_Expression, code: *Code_Node, code_to_match: *Code_Node) -> bool {
-    try_extract_expression :: (code: *Code_Node, code_to_match: *Code_Node) -> bool #expand {
+    try_match_wildcard :: (code: *Code_Node, code_to_match: *Code_Node) -> bool #expand {
         code_ident := is_backticked_identifier(code_to_match);
         if code_ident { 
             if code_ident.name != "_" {
-                code_ident.(*Extracted_Expression).expression = code;
+                code_ident.(*Match_Wildcard).pending_match = code;
             }
             return true;
         }
@@ -267,7 +327,7 @@ match_code :: (formatter: *Code_Formatter, match_expression: *Match_Expression, 
     
     // Check if this expression needs to be extracted.
     // NOTE: This is done before the null check on `code` so that we can match a wildcard to a null node.
-    if try_extract_expression(code, code_to_match)  return true;
+    if try_match_wildcard(code, code_to_match)  return true;
     
     if code == null {
         debug_log("Warning: `code` passed to match_code was null. Stack trace:");
@@ -658,9 +718,6 @@ match_code :: (formatter: *Code_Formatter, match_expression: *Match_Expression, 
 Program_Print :: #import "Program_Print";
 Code_Visit    :: #import "Code_Visit";
 
-// TODO: module/program parameters for quick lambda namespace struct
-
-
 
 
 is_backticked_identifier :: (node: *Code_Node) -> *Code_Ident {
@@ -670,23 +727,22 @@ is_backticked_identifier :: (node: *Code_Node) -> *Code_Ident {
 
 create_replacement_nodes :: (formatter: *Code_Formatter, expression: *Code_Node, rule: Node_Format_Rule) -> *Code_Node {
     result: *Code_Node;
-    if rule.match_expression.extracted_expressions {
-        // We need to override the current format rules so that we can run the formatter on the insert expression.
-        // So we back up the original rules and restore them  when we return.
+    if rule.match_expression.wildcards {
+        // We create a new formatter here, but we use the same allocator so that our nodes are still live when we return to finish formatting the outer code.
         insert_formatter: Code_Formatter;
         insert_formatter.allocator = formatter.allocator;
-        insert_formatter.format_rules = create_format_rules_from_extract_expressions(*insert_formatter, rule.match_expression.extracted_expressions);
+        insert_formatter.format_rules = create_format_rules_from_wildcard_expressions(*insert_formatter, rule.match_expression.wildcards);
         result = format_code(*insert_formatter, rule.insert_expression);
         
         // TODO: Improve contextual awareness so we can provide better logs. 
         //       I would like to log the replacements for even simple formats when modifying the input code, but the result can be very spammy.
         //       And if we are replacing subexpressions in the insert expression, that should be logged differently.
-        //       Perhaps we should just collect all of the subexpressions that get matched/replaced and log them at the end.
-        debug_log("Replacing subexpression (%) with (%)", sprintx(expression), sprintx(result));
-        debug_log("    Rule matched: (%) -> (%)", sprintx(rule.match_expression.root), sprintx(rule.insert_expression));
-        for rule.match_expression.extracted_expressions {
-            if it.expression {
-                debug_log("% -> %", it.ident.name, sprintx(it.expression));
+        
+        debug_log("Replacing subexpression % (%) with % (%)", expression, sprintx(expression), result, sprintx(result));
+        debug_log("    Rule matched: (%) -> (%)", sprintx(rule.match_expression.expression), sprintx(rule.insert_expression));
+        for rule.match_expression.wildcards {
+            if it.pending_match {
+                debug_log("%: %", it.ident.name, sprintx(it.pending_match));
             }
         }
     } else {
@@ -695,17 +751,17 @@ create_replacement_nodes :: (formatter: *Code_Formatter, expression: *Code_Node,
     return result;
 }
 
-create_format_rules_from_extract_expressions :: (formatter: *Code_Formatter, extracted_expressions: [] *Extracted_Expression) -> [] Node_Format_Rule {
+create_format_rules_from_wildcard_expressions :: (formatter: *Code_Formatter, wildcards: [] *Match_Wildcard) -> [] Node_Format_Rule {
     // TODO: maybe allocate rules using temp instead of node memory pool?
-    rules := NewArray(extracted_expressions.count, Node_Format_Rule,, get_allocator(formatter));
-    for extracted_expressions {
+    rules := NewArray(wildcards.count, Node_Format_Rule,, get_allocator(formatter));
+    for wildcards {
         rules[it_index] = .{
             match_expression = .{
                 // We can't use the existing identifier because it is backticked, 
                 // so we just make a new one for the match expression.
-                root = make_ident(it.name,, get_allocator(formatter)),
+                expression = make_ident(it.name,, get_allocator(formatter)),
             },
-            insert_expression = it.expression,
+            insert_expression = it.pending_match,
         };
     }
     return rules;
@@ -780,8 +836,11 @@ get_type_for_node_kind :: (kind: Code_Node.Kind) -> Type {
 }
 
 get_node_type_info :: (node: *Code_Node) -> *Type_Info {
-    type := get_type_for_node_kind(node.kind).(*Type_Info);
-    return type;
+    return get_type_for_node_kind(node.kind).(*Type_Info);
+}
+
+get_node_as_subtype_any :: (node: *Code_Node) -> Any {
+    return Any.{ get_node_type_info(node), node };
 }
 
 // TODO: what to do about serial numbers?
@@ -830,27 +889,38 @@ sprintx :: (root: *Code_Node) -> string {
     return builder_to_string(*debug_builder);
 }
 
-Walk_Nodes_Return_Code :: enum {
+Code_Walk_Write_Mode :: enum {
+    IMMUTABLE :: 0;
+    MODIFY_IN_PLACE;
+    COPY_ON_WRITE;
+}
+
+Code_Walk_Return_Code :: enum {
     ERROR       :: -1;
     CONTINUE    ::  0;
     RETURN      ::  1;
 }
 
-// NOTE: Restricting this to #scope_module because it's very much specific to the way we walk n this module, probably not so useful for generas.
-// The only reason I even have this in the first place is because we have similar needs between format_code and create_match_expression, insofar as we need to walk odes in the same way and conditionally replacs.
+// NOTE: 
+Code_Walk_Proc :: #type (formatter: *Code_Formatter, node: *Code_Node, user_data: *void) -> (Code_Walk_Return_Code, *Code_Node);
+
+// TODO: we should probably refactor this so instead of either running proc on entry or on return, we just have two separate Code_Walk_Procs: on_entry and on_return.
+
+// NOTE: Restricting this to #scope_module because it's very much specific to the way we walk in this module, probably not so useful for general users.
+// The only reason I even have this in the first place is because we have similar needs between format_code and create_match_expression, insofar as we need to walk odes in the same way and conditionally replace.
 walk_nodes :: (
-    $proc:              (*Code_Formatter, *Code_Node, *$T) -> (Walk_Nodes_Return_Code, *Code_Node), 
     formatter:          *Code_Formatter, 
     code:               *Code_Node, 
-    user_data:          *T,
-    $modify_in_place    := false,
-    $run_proc_on_return := false,
+    user_data:          *void,
+    on_entry:           Code_Walk_Proc = null, 
+    on_return:          Code_Walk_Proc = null, 
+    $write_mode:        Code_Walk_Write_Mode = .IMMUTABLE,
 ) -> (
     replacement_code:   *Code_Node
 ) {
     // So we don't have to pass proc at the call every site.
     walk :: (code: *Code_Node) -> *Code_Node #expand {
-        return walk_nodes(proc, formatter, code, user_data, modify_in_place, run_proc_on_return);
+        return walk_nodes(formatter, code, user_data, on_entry, on_return, write_mode);
     }
     
     if code == null {
@@ -859,11 +929,10 @@ walk_nodes :: (
         return null;
     }
     
-    
-    
     // NOTE: `code` is replaced with return value of proc unconditionally!
-    #if !run_proc_on_return {
-        return_code:, code = proc(formatter, code, user_data);
+    //       This means that if the caller does not want to replace the code node, they need to return the same node they were given.
+    if on_entry {
+        return_code:, code = on_entry(formatter, code, user_data);
         if #complete return_code == {
           case .CONTINUE;   // no op
           case .ERROR;      return null;
@@ -872,17 +941,20 @@ walk_nodes :: (
     }
     
     __get_as :: (c: *Code_Node, $T: Type) -> *T #expand { 
-        #if modify_in_place {
-            return c.(*T);
-        } else {
+        #if write_mode == .COPY_ON_WRITE {
             copy := c.(*T).*;
             return *copy;
+        } else {
+            // Return the actual pointer for both IMMUTABLE and MODIFY_IN_PLACE.
+            return c.(*T);
         }
     }
     
     __return :: (result: *Code_Node) #expand {
-        #if run_proc_on_return {
-            return_code, new := proc(formatter, result, user_data);
+        if on_return {
+            // NOTE: we don't replace the code node unconditionally here like we do for on_entry...
+            //       This should probably be changed so that it behaves the same as in the other case.
+            return_code, new := on_return(formatter, result, user_data);
             if #complete return_code == {
               case .CONTINUE;   // no op
               case .ERROR;      `return null;
@@ -891,31 +963,32 @@ walk_nodes :: (
             }
         }
         
-        #if modify_in_place {
+        #if write_mode == {
+          case .MODIFY_IN_PLACE;
             ensure_correctness(result);
             `return result;
-        } else {
-            // debug_log("Checking result % for modifications on return:", T);
-            // debug_log("   original: %", code.(*T).*);
-            // debug_log("   returned: %", result.*);
+            
+          case .COPY_ON_WRITE;
+            // debug_log("Checking result for modifications on return:");
+            // debug_log("   original: %, %", code,   get_node_as_subtype_any(code));
+            // debug_log("   returned: %, %", result, get_node_as_subtype_any(result));
             // If we have modified the node at all, we will copy the modified node from the stack to the formatter's memory pool and return the copy.
             node_size := get_node_type_info(result).runtime_size;
-            if result.kind != code.kind 
-            || memcmp(result, code, node_size) != 0 {
-                // debug_log("   returning new code...");
+            if result.kind != code.kind || memcmp(result, code, node_size) != 0 {
+                // debug_log("Result was modified, returning new code.");
                 result = copy_to_pool(formatter, result);
                 ensure_correctness(result);
                 `return result;
             }
-            // Otherwise, return the original code node.
-            `return code;
         }
+        
+        // Otherwise, return the original code node.
+        `return code;
     }
     
-    // TODO: clean up this since we now modify in place as well
     // macro to help with arrays of nodes, where we only want to create a copy of the array if we are actually going to modify it.
     copy_on_write :: (array: *[]$T, body: Code, flags: For_Flags) #expand {
-        #if modify_in_place {
+        #if write_mode != .COPY_ON_WRITE {
             for index: 0..array.count-1 {
                 `it := array.*[index];
                 `it_index := index;
@@ -1313,10 +1386,10 @@ ensure_correctness :: (node: *Code_Node) {
     }
 }
 
-generate_filter_proc :: ($filter_code: Code) -> Filter_Proc_Type #expand {
+generate_filter_proc :: ($filter_code: Code) -> Filter_Proc #expand {
     #insert,scope(filter_code) #code
     using struct {
-        internal :: ($filter_code: Code, using $__Filter_Proc_Context__: Type) -> __Filter_Proc_Context__.__This_Module__.Filter_Proc_Type #expand {
+        internal :: ($filter_code: Code, using $__Filter_Proc_Context__: Type) -> __Filter_Proc_Context__.__This_Module__.Filter_Proc #expand {
             return #insert #run __This_Module__.generate_filter_proc_code(filter_code);
         }
     };
@@ -1327,7 +1400,7 @@ generate_filter_proc :: ($filter_code: Code) -> Filter_Proc_Type #expand {
 //       As it stands now, we are just retuning a null filter proc pointer, which means we silently just do nothing when the user provides invalid filter_code.
 generate_filter_proc_code :: (filter_code: Code) -> Code #compile_time {
     push_allocator(temp);
-    auto_release_temp();
+    // auto_release_temp();
     
     filter_code_root := compiler_get_nodes(filter_code);
     
@@ -1344,12 +1417,11 @@ generate_filter_proc_code :: (filter_code: Code) -> Code #compile_time {
         compiler_report("Expected a quick-lambda for filter expression.", loc = get_location(filter_code_root));
         return null;
     }
-    assert(lambda_header.procedure_flags & .QUICK == .QUICK);
     
-    lambda_body   := lambda_header.body_or_null;
+    lambda_body := lambda_header.body_or_null;
     assert(lambda_body != null);
     
-    lambda_block  := lambda_body.block;
+    lambda_block := lambda_body.block;
     
     statements: [..] *Code_Node;
     array_reserve(*statements, lambda_header.arguments.count + lambda_block.statements.count);
@@ -1359,6 +1431,7 @@ generate_filter_proc_code :: (filter_code: Code) -> Code #compile_time {
     get_parameter_proc_expression := compiler_get_nodes(#code __This_Module__.get_extracted_expression_by_name);
     
     for lambda_header.arguments {
+        if it.name == "_" then continue;
         get_parameter_proc_call := make_procedure_call(get_parameter_proc_expression, 
             .{ match_expression_ident, null },
             .{ make_string_literal(it.name), null },
@@ -1382,7 +1455,7 @@ generate_filter_proc_code :: (filter_code: Code) -> Code #compile_time {
     body_block.statements = statements;
     
     header := compiler_get_nodes(#code
-        (match_expression: *__This_Module__.Match_Expression, code: *Code_Node) -> bool { }
+        (match_expression: *__This_Module__.Match_Expression, expr: *Code_Node) -> bool { }
     ).(*Code_Procedure_Header);
     
     header.body_or_null = New(Code_Procedure_Body);
@@ -1396,8 +1469,8 @@ generate_filter_proc_code :: (filter_code: Code) -> Code #compile_time {
 }
 
 get_extracted_expression_by_name :: (match_expression: *Match_Expression, name: string) -> *Code_Node {
-    for match_expression.extracted_expressions {
-        if it.name == name  return it.expression;
+    for match_expression.wildcards {
+        if it.name == name  return it.pending_match;
     }
     assert(false, "Invalid identifier used in filter code: %", name);
     return null;
@@ -1434,7 +1507,7 @@ Filter_Proc_Context :: struct {
     ) __This_Module__;
 }
 
-Filter_Proc_Type :: #type (*Match_Expression, *Code_Node) -> bool;
+Filter_Proc :: #type (*Match_Expression, *Code_Node) -> bool;
 
 
 #import "Print_Vars";

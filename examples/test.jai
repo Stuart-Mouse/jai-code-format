@@ -77,7 +77,7 @@ main :: () {
     // They're not particularly interesting for the most part...
     
     // NOTE: We don't currently match both (`a + 2) and (2 + `a) when the operator is commutative.
-    //       This seems like something peope may want to do, so perhaps in the future I will add some logic to make that possible.
+    //       This seems like something people may want to do, so perhaps in the future I will add some logic to make that possible.
     //       If you have any ideas or suggestions about this or anything else in this module, please let me know!
     //       There are a lot of weird little edge cases and API design things that will need to get ironed out over time...
     
@@ -195,10 +195,10 @@ main :: () {
                     (#code cast(`T) `a), 
                     (#code floor_float_to_int(a, T)), 
                     
-                    // In many cases, one may want to root of the extracted expression rather than the extracted subexpressions.
-                    // For this, you can just use use the reserved dientifier 'root'.
-                    // In this case we need to root because we need to check the cast node itself, rather than `T or `a.
-                    root => is_cast(root, to = .INTEGER, from = .FLOAT)
+                    // In many cases, one may want to root of the extracted expression rather than only the wildcard subexpressions.
+                    // For this, you can just use use the reserved identifier 'expr'.
+                    // In this case we use expr to check the cast node itself, rather than `T or `a.
+                    _ => is_cast(expr, to = .INTEGER, from = .FLOAT)
                 }, 
             );
         
