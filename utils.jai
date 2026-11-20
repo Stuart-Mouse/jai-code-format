@@ -409,6 +409,42 @@ ident_begins_with :: (code: *Code_Node, prefix: string) -> bool {
 
 
 
+Validate_Quick_Lambda_Flags :: enum_flags {
+    MAKE_RETURN_EXPLICIT;
+    REMOVE_RETURN;
+    
+    NONE :: 0;
+}
+
+validate_quick_lambda :: (code: *Code_Node, flags := Validate_Quick_Lambda_Flags.MAKE_RETURN_EXPLICIT) -> (header: *Code_Procedure_Header, body_block: *Code_Block) #compile_time {
+    header := code.(*Code_Procedure_Header);
+    
+    if header.kind != .PROCEDURE_HEADER || !(header.procedure_flags & .QUICK) {
+        compiler_report("Expected a quick-lambda.", loc = get_location(code));
+        return null, null;
+    }
+    
+    // This should probably be impossible, but let's just check anyways...
+    if header.body_or_null == null {
+        compiler_report("Quick-lambda is missing its body.", loc = get_location(code));
+        return null, null;
+    }
+    
+    body_block       := header.body_or_null.block;
+    return_statement := body_block.statements[body_block.statements.count-1].(*Code_Return);
+    assert(return_statement.kind == .RETURN); 
+    assert(return_statement.arguments_unsorted.count == 1); 
+    
+    if flags & .REMOVE_RETURN {
+        body_block.statements[body_block.statements.count-1] = return_statement.arguments_unsorted[0].expression;
+    } else if flags & .MAKE_RETURN_EXPLICIT {
+        return_statement.return_flags &= ~.AUTO_INSERTED_FOR_QUICK_LAMBDA;
+    }
+    
+    return header, body_block;
+}
+
+
 
 
 

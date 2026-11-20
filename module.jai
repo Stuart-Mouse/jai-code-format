@@ -1388,7 +1388,7 @@ ensure_correctness :: (node: *Code_Node) {
 
 generate_filter_proc :: ($filter_code: Code) -> Filter_Proc #expand {
     #insert,scope(filter_code) #code
-    using struct {
+    using struct #type_info_none {
         internal :: ($filter_code: Code, using $__Filter_Proc_Context__: Type) -> __Filter_Proc_Context__.__This_Module__.Filter_Proc #expand {
             return #insert #run __This_Module__.generate_filter_proc_code(filter_code);
         }
